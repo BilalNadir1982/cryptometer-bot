@@ -1,6 +1,8 @@
 import os
+import json
 import requests
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timedelta
 
 CRYPTOMETER_API_KEY = os.getenv("CRYPTOMETER_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -17,6 +19,10 @@ MIN_SCORE_TO_ALERT = 4
 BASE_URL = "https://api.cryptometer.io"
 SEND_TEST_MESSAGE = True
 
+# Tekrar mesaj engelleme
+COOLDOWN_MINUTES = 60
+ALERT_STATE_FILE = "alert_state.json"
+
 # Akıllı filtre ayarları
 MIN_BUY_SELL_RATIO = 1.15
 MAX_SELL_COUNT_OVER_BUY = 1
@@ -32,6 +38,37 @@ TP3_PCT = 8.0
 
 class APIError(Exception):
     pass
+
+
+def load_alert_state() -> Dict:
+    try:
+        with open(ALERT_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_alert_state(state: Dict) -> None:
+    with open(ALERT_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def can_send_alert(symbol: str, state: Dict) -> bool:
+    last_time_str = state.get(symbol)
+    if not last_time_str:
+        return True
+
+    try:
+        last_time = datetime.fromisoformat(last_time_str)
+    except Exception:
+        return True
+
+    return datetime.utcnow() >= last_time + timedelta(minutes=COOLDOWN_MINUTES)
+
+
+def mark_alert_sent(symbol: str, state: Dict) -> None:
+    state[symbol] = datetime.utcnow().isoformat()
+    save_alert_state(state)
 
 
 def api_get(path: str, params: Dict) -> Dict:
@@ -227,9 +264,17 @@ def live_trade_buy_bias(live: Optional[Dict]) -> Tuple[bool, float, float, float
     return ok, buy_q, sell_q, ratio
 
 
-def smart_fake_pump_filter(move_side: str, move_change: float, vf_ok: bool,
-                           lt_ok: bool, liq_ok: bool, live_ok: bool,
-                           buy_count: int, sell_count: int, ratio: float) -> Tuple[bool, str]:
+def smart_fake_pump_filter(
+    move_side: str,
+    move_change: float,
+    vf_ok: bool,
+    lt_ok: bool,
+    liq_ok: bool,
+    live_ok: bool,
+    buy_count: int,
+    sell_count: int,
+    ratio: float,
+) -> Tuple[bool, str]:
     if REQUIRE_PUMP_SIDE and move_side != "PUMP":
         return False, "PUMP tarafı değil"
 
@@ -301,33 +346,21 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
 
     if levels["entry"] > 0:
         level_text = (
-            f"Giriş: {levels['entry']:.8f}
-"
-            f"SL: {levels['sl']:.8f} (-%{DEFAULT_STOP_PCT})
-"
-            f"TP1: {levels['tp1']:.8f} (+%{TP1_PCT})
-"
-            f"TP2: {levels['tp2']:.8f} (+%{TP2_PCT})
-"
+            f"Giriş: {levels['entry']:.8f}\n"
+            f"SL: {levels['sl']:.8f} (-%{DEFAULT_STOP_PCT})\n"
+            f"TP1: {levels['tp1']:.8f} (+%{TP1_PCT})\n"
+            f"TP2: {levels['tp2']:.8f} (+%{TP2_PCT})\n"
             f"TP3: {levels['tp3']:.8f} (+%{TP3_PCT})"
         )
     else:
         level_text = "Giriş/TP/SL hesaplanamadı: fiyat verisi yok"
 
     msg = (
-        f"🚀 YÜKSEK İHTİMAL PUMP ADAYI: {symbol}
-"
-        f"Skor: {score}/5
-"
-        + "
-".join(f"• {r}" for r in reasons)
-        + f"
-
-{level_text}
-
-"
-        f"TradingView: {tv_pair}
-"
+        f"🚀 YÜKSEK İHTİMAL PUMP ADAYI: {symbol}\n"
+        f"Skor: {score}/5\n"
+        + "\n".join(f"• {r}" for r in reasons)
+        + f"\n\n{level_text}\n\n"
+        f"TradingView: {tv_pair}\n"
         f"Akıllı filtre: fake pump eleme geçti ✅"
     )
     return msg
@@ -346,6 +379,7 @@ def run_once() -> None:
     candidates = extract_candidate_symbols(movers)
 
     print(f"Aday coin sayısı: {len(candidates)}")
+    state = load_alert_state()
 
     found = 0
     for symbol, mover in candidates:
@@ -356,9 +390,13 @@ def run_once() -> None:
             continue
 
         if signal:
-            found += 1
-            print(f"Sinyal bulundu: {symbol}")
-            send_telegram(signal)
+            if can_send_alert(symbol, state):
+                found += 1
+                print(f"Sinyal gönderildi: {symbol}")
+                send_telegram(signal)
+                mark_alert_sent(symbol, state)
+            else:
+                print(f"Cooldown aktif, tekrar gönderilmedi: {symbol}")
         else:
             print(f"Pas geçildi: {symbol}")
 
