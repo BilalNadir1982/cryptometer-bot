@@ -19,17 +19,15 @@ MIN_SCORE_TO_ALERT = 4
 BASE_URL = "https://api.cryptometer.io"
 SEND_TEST_MESSAGE = True
 
-# Tekrar mesaj engelleme
 COOLDOWN_MINUTES = 60
 ALERT_STATE_FILE = "alert_state.json"
+SIGNAL_HISTORY_FILE = "signal_history.json"
 
-# Akıllı filtre ayarları
 MIN_BUY_SELL_RATIO = 1.15
 MAX_SELL_COUNT_OVER_BUY = 1
 REQUIRE_POSITIVE_LIVE_FLOW = True
-REQUIRE_PUMP_SIDE = False  # True yaparsan sadece PUMP tarafını kabul eder
+REQUIRE_PUMP_SIDE = False
 
-# Risk yönetimi
 DEFAULT_STOP_PCT = 2.0
 TP1_PCT = 3.0
 TP2_PCT = 5.0
@@ -40,17 +38,25 @@ class APIError(Exception):
     pass
 
 
-def load_alert_state() -> Dict:
+def load_json_file(path: str, default):
     try:
-        with open(ALERT_STATE_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
-        return {}
+        return default
+
+
+def save_json_file(path: str, data) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def load_alert_state() -> Dict:
+    return load_json_file(ALERT_STATE_FILE, {})
 
 
 def save_alert_state(state: Dict) -> None:
-    with open(ALERT_STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    save_json_file(ALERT_STATE_FILE, state)
 
 
 def can_send_alert(symbol: str, state: Dict) -> bool:
@@ -69,6 +75,25 @@ def can_send_alert(symbol: str, state: Dict) -> bool:
 def mark_alert_sent(symbol: str, state: Dict) -> None:
     state[symbol] = datetime.utcnow().isoformat()
     save_alert_state(state)
+
+
+def load_signal_history() -> List[Dict]:
+    return load_json_file(SIGNAL_HISTORY_FILE, [])
+
+
+def save_signal_history(history: List[Dict]) -> None:
+    save_json_file(SIGNAL_HISTORY_FILE, history)
+
+
+def append_signal_history(record: Dict) -> None:
+    history = load_signal_history()
+    history.append(record)
+
+    max_records = 500
+    if len(history) > max_records:
+        history = history[-max_records:]
+
+    save_signal_history(history)
 
 
 def api_get(path: str, params: Dict) -> Dict:
@@ -297,7 +322,7 @@ def smart_fake_pump_filter(
     return True, "Geçti"
 
 
-def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -> Optional[str]:
+def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -> Optional[Tuple[str, Dict]]:
     move_side = str(mover.get("side", "")).upper()
     move_change = float(mover.get("change_detected", 0) or 0)
 
@@ -363,7 +388,31 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
         f"TradingView: {tv_pair}\n"
         f"Akıllı filtre: fake pump eleme geçti ✅"
     )
-    return msg
+
+    signal_data = {
+        "symbol": symbol,
+        "score": score,
+        "move_side": move_side,
+        "move_change_pct": round(move_change, 4),
+        "netflow_usd": round(netflow, 2),
+        "buy_total_usd": round(buy_total, 2),
+        "buy_count": buy_count,
+        "sell_count": sell_count,
+        "short_liq_usd": round(shorts, 2),
+        "long_liq_usd": round(longs, 2),
+        "buy_qty": round(buy_q, 6),
+        "sell_qty": round(sell_q, 6),
+        "buy_sell_ratio": round(ratio, 4),
+        "entry": round(levels["entry"], 8),
+        "sl": round(levels["sl"], 8),
+        "tp1": round(levels["tp1"], 8),
+        "tp2": round(levels["tp2"], 8),
+        "tp3": round(levels["tp3"], 8),
+        "tradingview": tv_pair,
+        "reasons": reasons,
+    }
+
+    return msg, signal_data
 
 
 def run_once() -> None:
@@ -384,17 +433,24 @@ def run_once() -> None:
     found = 0
     for symbol, mover in candidates:
         try:
-            signal = build_signal(symbol, mover, vf, large_trades)
+            result = build_signal(symbol, mover, vf, large_trades)
         except Exception as e:
             print(f"{symbol} analiz hatası: {e}")
             continue
 
-        if signal:
+        if result:
+            signal_text, signal_data = result
             if can_send_alert(symbol, state):
                 found += 1
                 print(f"Sinyal gönderildi: {symbol}")
-                send_telegram(signal)
+                send_telegram(signal_text)
                 mark_alert_sent(symbol, state)
+
+                history_record = {
+                    "timestamp_utc": datetime.utcnow().isoformat(),
+                    **signal_data,
+                }
+                append_signal_history(history_record)
             else:
                 print(f"Cooldown aktif, tekrar gönderilmedi: {symbol}")
         else:
