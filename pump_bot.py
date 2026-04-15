@@ -1,27 +1,37 @@
 import os
-import time
 import requests
 from typing import Dict, List, Optional, Tuple
 
+# ==========================================
+# GITHUB SECRETS / AYARLAR
+# ==========================================
 CRYPTOMETER_API_KEY = os.getenv("CRYPTOMETER_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 EXCHANGE_SPOT = "binance"
 TIMEFRAME = "15m"
-TOP_CANDIDATES = 8
-MIN_NETFLOW_USD = 250000
-MIN_LARGE_TRADE_TOTAL = 75000
-MIN_RAPID_MOVE = 1.2
-MIN_SHORT_LIQUIDATION_USD = 50000
-
+TOP_CANDIDATES = 15
+MIN_NETFLOW_USD = 100000
+MIN_LARGE_TRADE_TOTAL = 40000
+MIN_RAPID_MOVE = 0.7
+MIN_SHORT_LIQUIDATION_USD = 20000
+MIN_SCORE_TO_ALERT = 3
 BASE_URL = "https://api.cryptometer.io"
 
+# Test mesajı açık/kapalı
+SEND_TEST_MESSAGE = True
 
+# ==========================================
+# YARDIMCI SINIF
+# ==========================================
 class APIError(Exception):
     pass
 
 
+# ==========================================
+# API İŞLEMLERİ
+# ==========================================
 def api_get(path: str, params: Dict) -> Dict:
     params = dict(params)
     params["api_key"] = CRYPTOMETER_API_KEY
@@ -43,7 +53,11 @@ def send_telegram(text: str) -> None:
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
     r = requests.post(url, json=payload, timeout=15)
     print("Telegram status:", r.status_code)
     print("Telegram response:", r.text[:500])
@@ -76,6 +90,9 @@ def get_live_trades(pair: str) -> Optional[Dict]:
     return rows[0] if rows else None
 
 
+# ==========================================
+# NORMALİZE / ADAY SEÇİMİ
+# ==========================================
 def normalize_symbol_from_pair(pair: str) -> str:
     return pair.split("-")[0].upper().strip()
 
@@ -85,7 +102,7 @@ def normalize_pair_for_spot(symbol: str) -> str:
 
 
 def extract_candidate_symbols(movers: List[Dict]) -> List[Tuple[str, Dict]]:
-    candidates = []
+    candidates: List[Tuple[str, Dict]] = []
     seen = set()
 
     for row in movers:
@@ -106,13 +123,15 @@ def extract_candidate_symbols(movers: List[Dict]) -> List[Tuple[str, Dict]]:
     return candidates
 
 
+# ==========================================
+# ANALİZ FONKSİYONLARI
+# ==========================================
 def volume_flow_has_symbol(symbol: str, vf: Dict) -> Tuple[bool, float]:
     net = 0.0
     for row in vf.get("netflow", []) or []:
         to_symbol = str(row.get("to", "")).upper()
         if to_symbol == symbol.upper():
-            vol = float(row.get("volume", 0) or 0)
-            net += vol
+            net += float(row.get("volume", 0) or 0)
 
     return net >= MIN_NETFLOW_USD, net
 
@@ -141,7 +160,7 @@ def summarize_large_trade_bias(symbol: str, rows: List[Dict]) -> Tuple[bool, flo
     return ok, buy_total, buy_count, sell_count
 
 
-def liquidation_short_pressure(symbol: str, liq_row: Dict) -> Tuple[bool, float, float]:
+def liquidation_short_pressure(liq_row: Dict) -> Tuple[bool, float, float]:
     shorts = 0.0
     longs = 0.0
 
@@ -168,54 +187,78 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
     move_side = str(mover.get("side", "")).upper()
     move_change = float(mover.get("change_detected", 0) or 0)
 
-    if move_side != "PUMP" or move_change < MIN_RAPID_MOVE:
+    # Daha fazla sinyal için sadece PUMP değil, güçlü yükselişleri de kabul ediyoruz
+    if move_change < MIN_RAPID_MOVE:
         return None
 
     vf_ok, netflow = volume_flow_has_symbol(symbol, vf)
     lt_ok, buy_total, buy_count, sell_count = summarize_large_trade_bias(symbol, large_trades)
-    liq_ok, shorts, longs = liquidation_short_pressure(symbol, get_liquidations(symbol))
+    liq_ok, shorts, longs = liquidation_short_pressure(get_liquidations(symbol))
     live_ok, buy_q, sell_q = live_trade_buy_bias(get_live_trades(normalize_pair_for_spot(symbol)))
 
     score = 0
     reasons = []
 
+    # PRO MOD 1: hızlı hareket
     score += 1
-    reasons.append(f"Rapid move: %{move_change:.2f}")
+    reasons.append(f"Rapid move: %{move_change:.2f} | Side: {move_side or 'N/A'}")
 
+    # PRO MOD 2: net para akışı
     if vf_ok:
         score += 1
         reasons.append(f"Net flow güçlü: ${netflow:,.0f}")
 
+    # PRO MOD 3: büyük alım baskısı
     if lt_ok:
         score += 1
-        reasons.append(f"Büyük alımlar: {buy_count} adet / ${buy_total:,.0f}")
+        reasons.append(f"Whale/Büyük alımlar: {buy_count} adet / ${buy_total:,.0f}")
+    elif sell_count > buy_count and sell_count > 0:
+        reasons.append(f"Dikkat: büyük satış sayısı {sell_count}")
 
+    # PRO MOD 4: short liquidation baskısı
     if liq_ok:
         score += 1
         reasons.append(f"Short liquidation baskısı: ${shorts:,.0f} > long ${longs:,.0f}")
 
+    # PRO MOD 5: canlı alım baskısı
     if live_ok:
         score += 1
-        reasons.append(f"Alım baskısı: {buy_q:,.2f} > {sell_q:,.2f}")
+        reasons.append(f"Canlı alım baskısı: {buy_q:,.2f} > {sell_q:,.2f}")
+    else:
+        reasons.append(f"Canlı denge/zayıf alım: {buy_q:,.2f} / {sell_q:,.2f}")
 
-    if score < 4:
+    if score < MIN_SCORE_TO_ALERT:
         return None
 
     tv_pair = f"BINANCE:{symbol}USDT"
     msg = (
-        f"🚀 PUMP ADAYI: {symbol}\n"
-        f"Skor: {score}/5\n"
-        + "\n".join(f"• {r}" for r in reasons)
-        + f"\n\nTradingView: {tv_pair}\n"
-        f"Stop fikri: son dip altı veya %2 altı\n"
+        f"🚀 PUMP / MOMENTUM ADAYI: {symbol}
+"
+        f"Skor: {score}/5
+"
+        + "
+".join(f"• {r}" for r in reasons)
+        + f"
+
+TradingView: {tv_pair}
+"
+        f"Risk notu: işlemi onaysız açma. Grafik, hacim ve destek/direnç kontrol et.
+"
         f"Kâr alma fikri: %3 / %5 / %8"
     )
     return msg
 
 
+# ==========================================
+# ANA ÇALIŞMA
+# ==========================================
 def run_once() -> None:
     if not CRYPTOMETER_API_KEY:
         raise ValueError("CRYPTOMETER_API_KEY eksik.")
+
+    # Test mesajı
+    if SEND_TEST_MESSAGE:
+        send_telegram("✅ GitHub bot çalıştı. Tarama başlıyor...")
 
     movers = get_rapid_movements()
     vf = get_volume_flow()
@@ -240,6 +283,7 @@ def run_once() -> None:
             print(f"Pas geçildi: {symbol}")
 
     if found == 0:
+        send_telegram("ℹ️ Bot çalıştı ama bu turda uygun sinyal bulunamadı.")
         print("Uygun sinyal bulunamadı.")
 
 
