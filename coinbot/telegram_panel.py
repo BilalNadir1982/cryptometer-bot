@@ -2,16 +2,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 import json
 
-BOT_TOKEN = "BURAYA_TOKEN"
-
+BOT_TOKEN = "8567778990:AAFfGmVWpV8ReszFQuAtOcwGqjKRF9_H75o"
 SIGNAL_FILE = "signal_history.json"
 
 
 def load_signals():
     try:
-        with open(SIGNAL_FILE, "r") as f:
+        with open(SIGNAL_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return []
 
 
@@ -24,7 +23,7 @@ def menu():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Crypto Panel\n\nSeçim yap:",
+        "🤖 Crypto Panel\n\nAşağıdan seçim yap:",
         reply_markup=menu()
     )
 
@@ -36,25 +35,34 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_signals()
 
     if query.data == "signals":
-        text = "📡 SON SİNYALLER\n\n"
-
-        for s in data[-5:]:
-            text += f"{s['symbol']} | Skor: {s['score']}\n"
+        text = "📡 Son Sinyaller\n\n"
+        if not data:
+            text += "Henüz kayıtlı sinyal yok."
+        else:
+            for s in data[-5:]:
+                symbol = s.get("symbol", "-")
+                score = s.get("score", "-")
+                move = s.get("move_side", "-")
+                text += f"{symbol} | {move} | Skor: {score}\n"
 
     elif query.data == "stats":
         total = len(data)
-        wins = len([x for x in data if x.get("tp1")])
-        text = f"📊 Toplam: {total}\n"
+        text = (
+            "📊 Performans\n\n"
+            f"Toplam kayıtlı sinyal: {total}\n"
+        )
+
+    else:
+        text = "Menü"
 
     await query.edit_message_text(text, reply_markup=menu())
 
 
 def run():
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(buttons))
-
+    print("Panel bot çalışıyor...")
     app.run_polling()
 
 
