@@ -1,50 +1,55 @@
 import os
 import json
-import requests
-from typing import Dict, List, Optional, Tuple
+import time
 from datetime import datetime, timedelta
 
-CRYPTOMETER_API_KEY = os.getenv("CRYPTOMETER_API_KEY", "")
+import requests
+import pandas as pd
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-EXCHANGE_SPOT = "binance"
-TIMEFRAME = "15m"
-TOP_CANDIDATES = 12
-MIN_NETFLOW_USD = 150000
-MIN_LARGE_TRADE_TOTAL = 50000
-MIN_RAPID_MOVE = 1.0
-MIN_SHORT_LIQUIDATION_USD = 25000
-MIN_SCORE_TO_ALERT = 4
-BASE_URL = "https://api.cryptometer.io"
-SEND_TEST_MESSAGE = True
+BASE_URL = "https://fapi.binance.com"
 
-COOLDOWN_MINUTES = 60
+# ANA AYARLAR
+SCAN_INTERVAL_NAME = "15m"
+COOLDOWN_MINUTES = 180
 ALERT_STATE_FILE = "alert_state.json"
 SIGNAL_HISTORY_FILE = "signal_history.json"
 
-MIN_BUY_SELL_RATIO = 1.15
-MAX_SELL_COUNT_OVER_BUY = 1
-REQUIRE_POSITIVE_LIVE_FLOW = True
-REQUIRE_PUMP_SIDE = False
+# SENİN AYARLARIN
+RSI_LEN = 14
+ADX_LEN = 14
+EMA_FAST_LEN = 20
+EMA_MID_LEN = 50
+EMA_SLOW_LEN = 200
+ATR_LEN = 14
+VOL_LEN = 20
+PIVOT_LEN = 40            # Ekran görüntüne göre 40 yaptım
+ADX_TREND_MIN = 22
+HARD_DROP_ATR = 2.3
+TREND_PCT_BUY = 60
+TREND_PCT_SELL = 40
 
-DEFAULT_STOP_PCT = 2.0
-TP1_PCT = 3.0
-TP2_PCT = 5.0
-TP3_PCT = 8.0
+# DİP / TEPE RSI EŞİKLERİ
+DIP_RSI_MAX = 38
+TEPE_RSI_MIN = 62
 
-# YENİ EKLENEN AYARLAR
-STRONG_SCORE_MIN = 5
-MEDIUM_SCORE_MIN = 4
-ALLOW_WEAK_SIGNALS = False
-SEND_COOLDOWN_LOG = True
+# Hacim filtresi
+VOL_MULTIPLIER_SIGNAL = 1.3
+VOL_MULTIPLIER_TREND = 1.2
+
+# Binance istek ayarları
+REQUEST_TIMEOUT = 20
+LIMIT_15M = 350
+LIMIT_1H = 350
+LIMIT_4H = 350
+
+# Tüm coinler için tarar
+ONLY_USDT_PERPETUAL = True
 
 
-class APIError(Exception):
-    pass
-
-
-def load_json_file(path: str, default):
+def load_json_file(path, default):
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
@@ -52,73 +57,54 @@ def load_json_file(path: str, default):
         return default
 
 
-def save_json_file(path: str, data) -> None:
+def save_json_file(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-def load_alert_state() -> Dict:
+def load_alert_state():
     return load_json_file(ALERT_STATE_FILE, {})
 
 
-def save_alert_state(state: Dict) -> None:
+def save_alert_state(state):
     save_json_file(ALERT_STATE_FILE, state)
 
 
-def can_send_alert(symbol: str, state: Dict) -> bool:
-    last_time_str = state.get(symbol)
+def load_signal_history():
+    return load_json_file(SIGNAL_HISTORY_FILE, [])
+
+
+def save_signal_history(history):
+    save_json_file(SIGNAL_HISTORY_FILE, history)
+
+
+def append_signal_history(record):
+    history = load_signal_history()
+    history.append(record)
+    if len(history) > 1000:
+        history = history[-1000:]
+    save_signal_history(history)
+
+
+def can_send_alert(key, state):
+    last_time_str = state.get(key)
     if not last_time_str:
         return True
-
     try:
         last_time = datetime.fromisoformat(last_time_str)
     except Exception:
         return True
-
     return datetime.utcnow() >= last_time + timedelta(minutes=COOLDOWN_MINUTES)
 
 
-def mark_alert_sent(symbol: str, state: Dict) -> None:
-    state[symbol] = datetime.utcnow().isoformat()
+def mark_alert_sent(key, state):
+    state[key] = datetime.utcnow().isoformat()
     save_alert_state(state)
 
 
-def load_signal_history() -> List[Dict]:
-    return load_json_file(SIGNAL_HISTORY_FILE, [])
-
-
-def save_signal_history(history: List[Dict]) -> None:
-    save_json_file(SIGNAL_HISTORY_FILE, history)
-
-
-def append_signal_history(record: Dict) -> None:
-    history = load_signal_history()
-    history.append(record)
-
-    max_records = 500
-    if len(history) > max_records:
-        history = history[-max_records:]
-
-    save_signal_history(history)
-
-
-def api_get(path: str, params: Dict) -> Dict:
-    params = dict(params)
-    params["api_key"] = CRYPTOMETER_API_KEY
-    url = f"{BASE_URL}{path}"
-
-    r = requests.get(url, params=params, timeout=20)
-    r.raise_for_status()
-    data = r.json()
-
-    if isinstance(data, dict) and str(data.get("error", "false")).lower() == "true":
-        raise APIError(f"API hata döndürdü: {path} -> {data}")
-    return data
-
-
-def send_telegram(text: str) -> None:
+def send_telegram(text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram bilgileri eksik.")
+        print("Telegram bilgileri eksik:")
         print(text)
         return
 
@@ -126,364 +112,378 @@ def send_telegram(text: str) -> None:
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
-        "disable_web_page_preview": True,
+        "disable_web_page_preview": True
     }
     r = requests.post(url, json=payload, timeout=15)
-    print("Telegram status:", r.status_code)
-    print("Telegram response:", r.text[:500])
+    print("Telegram:", r.status_code, r.text[:300])
 
 
-def get_rapid_movements() -> List[Dict]:
-    data = api_get("/rapid-movements/", {})
-    return data.get("data", []) or []
+def binance_get(path, params=None):
+    params = params or {}
+    url = f"{BASE_URL}{path}"
+    r = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
+    r.raise_for_status()
+    return r.json()
 
 
-def get_volume_flow() -> Dict:
-    data = api_get("/volume-flow/", {"timeframe": TIMEFRAME})
-    return data.get("data", {}) or {}
+def get_all_symbols():
+    data = binance_get("/fapi/v1/exchangeInfo")
+    symbols = []
+
+    for row in data.get("symbols", []):
+        symbol = row.get("symbol", "")
+        status = row.get("status", "")
+        quote = row.get("quoteAsset", "")
+        contract_type = row.get("contractType", "")
+
+        if ONLY_USDT_PERPETUAL:
+            if (
+                status == "TRADING"
+                and quote == "USDT"
+                and contract_type == "PERPETUAL"
+            ):
+                symbols.append(symbol)
+        else:
+            if status == "TRADING" and quote == "USDT":
+                symbols.append(symbol)
+
+    # İstersen burada bazı coinleri elemek kolay olsun
+    blocked = {"BTCSTUSDT"}
+    symbols = [s for s in symbols if s not in blocked]
+
+    return symbols
 
 
-def get_large_trades_activity() -> List[Dict]:
-    data = api_get("/large-trades-activity/", {"e": EXCHANGE_SPOT})
-    return data.get("data", []) or []
+def get_klines(symbol, interval, limit):
+    data = binance_get("/fapi/v1/klines", {
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    })
+
+    cols = [
+        "open_time", "open", "high", "low", "close", "volume",
+        "close_time", "quote_asset_volume", "number_of_trades",
+        "taker_buy_base", "taker_buy_quote", "ignore"
+    ]
+
+    df = pd.DataFrame(data, columns=cols)
+    if df.empty:
+        return df
+
+    for c in ["open", "high", "low", "close", "volume"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms", utc=True)
+    df["close_time"] = pd.to_datetime(df["close_time"], unit="ms", utc=True)
+
+    # Son mumu güvenli olsun diye çıkarıyoruz
+    if len(df) > 5:
+        df = df.iloc[:-1].copy()
+
+    df.reset_index(drop=True, inplace=True)
+    return df
 
 
-def get_liquidations(symbol: str) -> Dict:
-    data = api_get("/liquidation-data-v2/", {"symbol": symbol.lower()})
-    rows = data.get("data", []) or []
-    return rows[0] if rows else {}
+def ema(series, length):
+    return series.ewm(span=length, adjust=False).mean()
 
 
-def get_live_trades(pair: str) -> Optional[Dict]:
-    data = api_get("/live-trades/", {"e": EXCHANGE_SPOT, "pair": pair.lower()})
-    rows = data.get("data", []) or []
-    return rows[0] if rows else None
+def rsi(series, length=14):
+    delta = series.diff()
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+
+    avg_gain = gain.ewm(alpha=1 / length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / length, adjust=False).mean()
+
+    rs = avg_gain / avg_loss.replace(0, pd.NA)
+    out = 100 - (100 / (1 + rs))
+    return out.fillna(50)
 
 
-def normalize_symbol_from_pair(pair: str) -> str:
-    return pair.split("-")[0].upper().strip()
+def atr(df, length=14):
+    prev_close = df["close"].shift(1)
+    tr1 = df["high"] - df["low"]
+    tr2 = (df["high"] - prev_close).abs()
+    tr3 = (df["low"] - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / length, adjust=False).mean()
 
 
-def normalize_pair_for_spot(symbol: str) -> str:
-    return f"{symbol.upper()}-USDT"
+def macd(series, fast=12, slow=26, signal=9):
+    fast_ema = ema(series, fast)
+    slow_ema = ema(series, slow)
+    macd_line = fast_ema - slow_ema
+    signal_line = ema(macd_line, signal)
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
 
 
-def extract_candidate_symbols(movers: List[Dict]) -> List[Tuple[str, Dict]]:
-    candidates: List[Tuple[str, Dict]] = []
-    seen = set()
+def adx(df, length=14):
+    high = df["high"]
+    low = df["low"]
+    close = df["close"]
 
-    for row in movers:
-        pair = str(row.get("pair", "")).upper()
-        if not pair.endswith("-USDT"):
-            continue
+    up_move = high.diff()
+    down_move = -low.diff()
 
-        symbol = normalize_symbol_from_pair(pair)
-        if symbol in seen:
-            continue
+    plus_dm = pd.Series(0.0, index=df.index)
+    minus_dm = pd.Series(0.0, index=df.index)
 
-        seen.add(symbol)
-        candidates.append((symbol, row))
+    plus_dm[(up_move > down_move) & (up_move > 0)] = up_move
+    minus_dm[(down_move > up_move) & (down_move > 0)] = down_move
 
-        if len(candidates) >= TOP_CANDIDATES:
-            break
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    return candidates
+    trur = tr.ewm(alpha=1 / length, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / length, adjust=False).mean() / trur.replace(0, pd.NA)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / length, adjust=False).mean() / trur.replace(0, pd.NA)
 
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+    adx_line = dx.ewm(alpha=1 / length, adjust=False).mean()
 
-def pick_entry_price(mover: Dict, live: Optional[Dict]) -> float:
-    candidates = []
-
-    for key in ["price", "last_price", "current_price", "close", "mark_price"]:
-        val = mover.get(key)
-        if val not in (None, ""):
-            try:
-                candidates.append(float(val))
-            except Exception:
-                pass
-
-    if live:
-        for tf in ["15m", "30m", "1h"]:
-            row = live.get(tf) or {}
-            for key in ["price", "last_price", "close", "mark_price"]:
-                val = row.get(key)
-                if val not in (None, ""):
-                    try:
-                        candidates.append(float(val))
-                    except Exception:
-                        pass
-
-    for c in candidates:
-        if c > 0:
-            return c
-    return 0.0
+    return adx_line.fillna(0), plus_di.fillna(0), minus_di.fillna(0)
 
 
-def calc_trade_levels(entry_price: float) -> Dict[str, float]:
-    if entry_price <= 0:
-        return {"entry": 0.0, "sl": 0.0, "tp1": 0.0, "tp2": 0.0, "tp3": 0.0}
+def add_indicators(df):
+    if df.empty:
+        return df
 
-    sl = entry_price * (1 - DEFAULT_STOP_PCT / 100)
-    tp1 = entry_price * (1 + TP1_PCT / 100)
-    tp2 = entry_price * (1 + TP2_PCT / 100)
-    tp3 = entry_price * (1 + TP3_PCT / 100)
+    df = df.copy()
+    df["ema20"] = ema(df["close"], EMA_FAST_LEN)
+    df["ema50"] = ema(df["close"], EMA_MID_LEN)
+    df["ema200"] = ema(df["close"], EMA_SLOW_LEN)
 
-    return {
-        "entry": entry_price,
-        "sl": sl,
-        "tp1": tp1,
-        "tp2": tp2,
-        "tp3": tp3,
-    }
+    df["rsi"] = rsi(df["close"], RSI_LEN)
+    df["atr"] = atr(df, ATR_LEN)
+    df["volMa"] = df["volume"].rolling(VOL_LEN).mean()
 
+    macd_line, macd_signal, _ = macd(df["close"], 12, 26, 9)
+    df["macdLine"] = macd_line
+    df["macdSignal"] = macd_signal
 
-def volume_flow_has_symbol(symbol: str, vf: Dict) -> Tuple[bool, float]:
-    net = 0.0
-    for row in vf.get("netflow", []) or []:
-        to_symbol = str(row.get("to", "")).upper()
-        if to_symbol == symbol.upper():
-            net += float(row.get("volume", 0) or 0)
+    adx_line, plus_di, minus_di = adx(df, ADX_LEN)
+    df["adx"] = adx_line
+    df["plusDI"] = plus_di
+    df["minusDI"] = minus_di
 
-    return net >= MIN_NETFLOW_USD, net
+    return df
 
 
-def summarize_large_trade_bias(symbol: str, rows: List[Dict]) -> Tuple[bool, float, int, int]:
-    buy_total = 0.0
-    buy_count = 0
-    sell_count = 0
-    target_pair = normalize_pair_for_spot(symbol)
-
-    for row in rows:
-        pair = str(row.get("pair", "")).upper()
-        side = str(row.get("side", "")).upper()
-        total = float(row.get("total", 0) or 0)
-
-        if pair != target_pair:
-            continue
-
-        if side == "BUY" and total >= MIN_LARGE_TRADE_TOTAL:
-            buy_total += total
-            buy_count += 1
-        elif side == "SELL" and total >= MIN_LARGE_TRADE_TOTAL:
-            sell_count += 1
-
-    ok = buy_count >= 1 and sell_count <= (buy_count + MAX_SELL_COUNT_OVER_BUY)
-    return ok, buy_total, buy_count, sell_count
-
-
-def liquidation_short_pressure(liq_row: Dict) -> Tuple[bool, float, float]:
-    shorts = 0.0
-    longs = 0.0
-
-    for _, values in liq_row.items():
-        if isinstance(values, dict):
-            shorts += float(values.get("shorts", 0) or 0)
-            longs += float(values.get("longs", 0) or 0)
-
-    ok = shorts >= MIN_SHORT_LIQUIDATION_USD and shorts >= longs
-    return ok, shorts, longs
-
-
-def live_trade_buy_bias(live: Optional[Dict]) -> Tuple[bool, float, float, float]:
-    if not live:
-        return False, 0.0, 0.0, 0.0
-
-    row = live.get("15m") or live.get("30m") or live.get("1h") or {}
-    buy_q = float(row.get("buy_quantity", 0) or 0)
-    sell_q = float(row.get("sell_quantity", 0) or 0)
-    ratio = (buy_q / sell_q) if sell_q > 0 else (999.0 if buy_q > 0 else 0.0)
-    ok = buy_q > sell_q and ratio >= MIN_BUY_SELL_RATIO
-    return ok, buy_q, sell_q, ratio
-
-
-def smart_fake_pump_filter(
-    move_side: str,
-    move_change: float,
-    vf_ok: bool,
-    lt_ok: bool,
-    liq_ok: bool,
-    live_ok: bool,
-    buy_count: int,
-    sell_count: int,
-    ratio: float,
-) -> Tuple[bool, str]:
-    if REQUIRE_PUMP_SIDE and move_side != "PUMP":
-        return False, "PUMP tarafı değil"
-
-    if move_change < MIN_RAPID_MOVE:
-        return False, "Yeterli hızlı yükseliş yok"
-
-    if sell_count > buy_count + MAX_SELL_COUNT_OVER_BUY:
-        return False, "Büyük satış baskısı fazla"
-
-    if REQUIRE_POSITIVE_LIVE_FLOW and not live_ok:
-        return False, "Canlı alım baskısı zayıf"
-
-    positive_signals = sum([vf_ok, lt_ok, liq_ok, live_ok])
-    if positive_signals < 3:
-        return False, "Onay sayısı düşük"
-
-    if ratio and ratio < MIN_BUY_SELL_RATIO:
-        return False, "Buy/Sell oranı zayıf"
-
-    return True, "Geçti"
-
-
-def classify_signal_strength(score: int) -> str:
-    if score >= STRONG_SCORE_MIN:
-        return "GÜÇLÜ"
-    elif score >= MEDIUM_SCORE_MIN:
-        return "ORTA"
-    return "ZAYIF"
-
-
-def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -> Optional[Tuple[str, Dict]]:
-    move_side = str(mover.get("side", "")).upper()
-    move_change = float(mover.get("change_detected", 0) or 0)
-
-    vf_ok, netflow = volume_flow_has_symbol(symbol, vf)
-    lt_ok, buy_total, buy_count, sell_count = summarize_large_trade_bias(symbol, large_trades)
-    liq_ok, shorts, longs = liquidation_short_pressure(get_liquidations(symbol))
-    live = get_live_trades(normalize_pair_for_spot(symbol))
-    live_ok, buy_q, sell_q, ratio = live_trade_buy_bias(live)
-
-    fake_ok, fake_reason = smart_fake_pump_filter(
-        move_side, move_change, vf_ok, lt_ok, liq_ok, live_ok,
-        buy_count, sell_count, ratio
-    )
-    if not fake_ok:
-        print(f"{symbol} elendi -> {fake_reason}")
+def trend_score(df):
+    if df.empty or len(df) < 5:
         return None
+
+    row = df.iloc[-1]
 
     score = 0
-    reasons = []
+    score += 1 if row["ema20"] > row["ema50"] else -1
+    score += 1 if row["ema50"] > row["ema200"] else -1
+    score += 1 if row["close"] > row["ema20"] else -1
+    score += 1 if row["rsi"] > 50 else -1
+    score += 1 if row["macdLine"] > row["macdSignal"] else -1
+    score += 1 if row["adx"] > ADX_TREND_MIN else 0
 
-    score += 1
-    reasons.append(f"Rapid move: %{move_change:.2f} | Side: {move_side or 'N/A'}")
+    return score
 
-    if vf_ok:
-        score += 1
-        reasons.append(f"Net flow güçlü: ${netflow:,.0f}")
 
-    if lt_ok:
-        score += 1
-        reasons.append(f"Whale/Büyük alımlar: {buy_count} adet / ${buy_total:,.0f}")
+def calc_trend_pct(df15):
+    row = df15.iloc[-1]
 
-    if liq_ok:
-        score += 1
-        reasons.append(f"Short liquidation baskısı: ${shorts:,.0f} > long ${longs:,.0f}")
+    local_score = 0.0
+    local_score += 1 if row["ema20"] > row["ema50"] else -1
+    local_score += 1 if row["ema50"] > row["ema200"] else -1
+    local_score += 1 if row["close"] > row["ema20"] else -1
+    local_score += 1 if row["rsi"] > 50 else -1
+    local_score += 1 if row["macdLine"] > row["macdSignal"] else -1
+    local_score += 1 if row["adx"] > ADX_TREND_MIN else 0
+    local_score += 1 if row["volume"] > row["volMa"] * VOL_MULTIPLIER_TREND else -1
 
-    if live_ok:
-        score += 1
-        reasons.append(f"Canlı alım baskısı: {buy_q:,.2f} > {sell_q:,.2f} | Oran: {ratio:.2f}")
+    trend_pct = round(50 + (local_score / 7 * 50))
+    return int(trend_pct)
 
-    if score < MIN_SCORE_TO_ALERT:
+
+def pivot_low_confirmed(lows, left, right):
+    out = [False] * len(lows)
+    n = len(lows)
+    for i in range(left, n - right):
+        center = lows[i]
+        window = lows[i - left:i + right + 1]
+        if pd.isna(center):
+            continue
+        if center == min(window):
+            # Pine'da pivot onayı sağ taraftan sonra gelir
+            out[i + right] = True
+    return pd.Series(out)
+
+
+def pivot_high_confirmed(highs, left, right):
+    out = [False] * len(highs)
+    n = len(highs)
+    for i in range(left, n - right):
+        center = highs[i]
+        window = highs[i - left:i + right + 1]
+        if pd.isna(center):
+            continue
+        if center == max(window):
+            out[i + right] = True
+    return pd.Series(out)
+
+
+def analyze_symbol(symbol):
+    try:
+        df15 = add_indicators(get_klines(symbol, "15m", LIMIT_15M))
+        df1h = add_indicators(get_klines(symbol, "1h", LIMIT_1H))
+        df4h = add_indicators(get_klines(symbol, "4h", LIMIT_4H))
+    except Exception as e:
+        print(f"{symbol} veri çekme hatası: {e}")
         return None
 
-    strength = classify_signal_strength(score)
-
-    if strength == "ZAYIF" and not ALLOW_WEAK_SIGNALS:
-        print(f"{symbol} zayıf sinyal olduğu için elendi.")
+    if df15.empty or df1h.empty or df4h.empty:
         return None
 
-    entry_price = pick_entry_price(mover, live)
-    levels = calc_trade_levels(entry_price)
-    tv_pair = f"BINANCE:{symbol}USDT"
+    # Yeterli veri kontrolü
+    if len(df15) < max(EMA_SLOW_LEN + PIVOT_LEN + 5, 260):
+        return None
+    if len(df1h) < EMA_SLOW_LEN + 5:
+        return None
+    if len(df4h) < EMA_SLOW_LEN + 5:
+        return None
 
-    if levels["entry"] > 0:
-        level_text = (
-            f"Giriş: {levels['entry']:.8f}\n"
-            f"SL: {levels['sl']:.8f} (-%{DEFAULT_STOP_PCT})\n"
-            f"TP1: {levels['tp1']:.8f} (+%{TP1_PCT})\n"
-            f"TP2: {levels['tp2']:.8f} (+%{TP2_PCT})\n"
-            f"TP3: {levels['tp3']:.8f} (+%{TP3_PCT})"
-        )
-    else:
-        level_text = "Giriş/TP/SL hesaplanamadı: fiyat verisi yok"
+    score15 = trend_score(df15)
+    score1h = trend_score(df1h)
+    score4h = trend_score(df4h)
 
-    msg = (
-        f"🚀 YÜKSEK İHTİMAL PUMP ADAYI: {symbol}\n"
-        f"Güç: {strength}\n"
-        f"Skor: {score}/5\n"
-        + "\n".join(f"• {r}" for r in reasons)
-        + f"\n\n{level_text}\n\n"
-        f"TradingView: {tv_pair}\n"
-        f"Akıllı filtre: fake pump eleme geçti ✅"
+    if score15 is None or score1h is None or score4h is None:
+        return None
+
+    mtf_bull = score15 >= 3 and score1h >= 3 and score4h >= 2
+    mtf_bear = score15 <= -3 and score1h <= -3 and score4h <= -2
+
+    trend_pct = calc_trend_pct(df15)
+
+    # Pivot teyit serileri
+    df15["pivotLowConfirmed"] = pivot_low_confirmed(df15["low"].tolist(), PIVOT_LEN, PIVOT_LEN)
+    df15["pivotHighConfirmed"] = pivot_high_confirmed(df15["high"].tolist(), PIVOT_LEN, PIVOT_LEN)
+
+    # Pine mantığı:
+    # dipCond = pivotLow confirmed and rsi[pivotLen] < 38
+    # tepeCond = pivotHigh confirmed and rsi[pivotLen] > 62
+    df15["dipCond"] = df15["pivotLowConfirmed"] & (df15["rsi"].shift(PIVOT_LEN) < DIP_RSI_MAX)
+    df15["tepeCond"] = df15["pivotHighConfirmed"] & (df15["rsi"].shift(PIVOT_LEN) > TEPE_RSI_MIN)
+
+    # Pine mantığı:
+    # buySignal  = dipCond[2]  and mtfBull and trendPct >= 60 and ...
+    # sellSignal = tepeCond[2] and mtfBear and trendPct <= 40 and ...
+    df15["buySignal"] = (
+        df15["dipCond"].shift(2).fillna(False)
+        & mtf_bull
+        & (trend_pct >= TREND_PCT_BUY)
+        & (df15["close"] > df15["ema20"])
+        & (df15["macdLine"] > df15["macdSignal"])
+        & (df15["volume"] > df15["volMa"] * VOL_MULTIPLIER_SIGNAL)
     )
 
-    signal_data = {
+    df15["sellSignal"] = (
+        df15["tepeCond"].shift(2).fillna(False)
+        & mtf_bear
+        & (trend_pct <= TREND_PCT_SELL)
+        & (df15["close"] < df15["ema20"])
+        & (df15["macdLine"] < df15["macdSignal"])
+        & (df15["volume"] > df15["volMa"] * VOL_MULTIPLIER_SIGNAL)
+    )
+
+    last = df15.iloc[-1]
+
+    signal_side = None
+    if bool(last["buySignal"]):
+        signal_side = "AL"
+    elif bool(last["sellSignal"]):
+        signal_side = "SAT"
+    else:
+        return None
+
+    price = float(last["close"])
+    rsi_now = float(last["rsi"])
+    adx_now = float(last["adx"])
+    volume_now = float(last["volume"])
+    vol_ma_now = float(last["volMa"]) if pd.notna(last["volMa"]) else 0.0
+
+    tv_pair = f"BINANCE:{symbol}"
+
+    text = (
+        f"{'🟢' if signal_side == 'AL' else '🔴'} {signal_side} SİNYALİ\n"
+        f"Coin: {symbol}\n"
+        f"Zaman: {SCAN_INTERVAL_NAME}\n"
+        f"Fiyat: {price:.6f}\n"
+        f"Trend: {'YÜKSELİŞ' if mtf_bull else 'DÜŞÜŞ' if mtf_bear else 'KARARSIZ'}\n"
+        f"Trend %: {trend_pct}\n"
+        f"RSI: {rsi_now:.2f}\n"
+        f"ADX: {adx_now:.2f}\n"
+        f"Hacim: {volume_now:.2f}\n"
+        f"Hacim Ort.: {vol_ma_now:.2f}\n"
+        f"TradingView: {tv_pair}\n"
+        f"Sistem: PRO MTF Trend v4.2 uyumlu"
+    )
+
+    record = {
+        "timestamp_utc": datetime.utcnow().isoformat(),
         "symbol": symbol,
-        "strength": strength,
-        "score": score,
-        "move_side": move_side,
-        "move_change_pct": round(move_change, 4),
-        "netflow_usd": round(netflow, 2),
-        "buy_total_usd": round(buy_total, 2),
-        "buy_count": buy_count,
-        "sell_count": sell_count,
-        "short_liq_usd": round(shorts, 2),
-        "long_liq_usd": round(longs, 2),
-        "buy_qty": round(buy_q, 6),
-        "sell_qty": round(sell_q, 6),
-        "buy_sell_ratio": round(ratio, 4),
-        "entry": round(levels["entry"], 8),
-        "sl": round(levels["sl"], 8),
-        "tp1": round(levels["tp1"], 8),
-        "tp2": round(levels["tp2"], 8),
-        "tp3": round(levels["tp3"], 8),
+        "side": signal_side,
+        "timeframe": SCAN_INTERVAL_NAME,
+        "price": round(price, 8),
+        "trend_pct": trend_pct,
+        "rsi": round(rsi_now, 4),
+        "adx": round(adx_now, 4),
+        "mtf_bull": bool(mtf_bull),
+        "mtf_bear": bool(mtf_bear),
+        "volume": round(volume_now, 2),
+        "volume_ma": round(vol_ma_now, 2),
         "tradingview": tv_pair,
-        "reasons": reasons,
     }
 
-    return msg, signal_data
+    return signal_side, text, record
 
 
-def run_once() -> None:
-    if not CRYPTOMETER_API_KEY:
-        raise ValueError("CRYPTOMETER_API_KEY eksik.")
+def run_once():
+    symbols = get_all_symbols()
+    print(f"Toplam taranacak coin: {len(symbols)}")
 
-    if SEND_TEST_MESSAGE:
-        send_telegram("✅ GitHub bot çalıştı. Akıllı filtreli tarama başlıyor...")
-
-    movers = get_rapid_movements()
-    vf = get_volume_flow()
-    large_trades = get_large_trades_activity()
-    candidates = extract_candidate_symbols(movers)
-
-    print(f"Aday coin sayısı: {len(candidates)}")
     state = load_alert_state()
-
     found = 0
-    for symbol, mover in candidates:
+
+    for i, symbol in enumerate(symbols, start=1):
+        print(f"[{i}/{len(symbols)}] {symbol} taranıyor...")
         try:
-            result = build_signal(symbol, mover, vf, large_trades)
+            result = analyze_symbol(symbol)
         except Exception as e:
             print(f"{symbol} analiz hatası: {e}")
             continue
 
-        if result:
-            signal_text, signal_data = result
-            if can_send_alert(symbol, state):
-                found += 1
-                print(f"Sinyal gönderildi: {symbol}")
-                send_telegram(signal_text)
-                mark_alert_sent(symbol, state)
+        if not result:
+            continue
 
-                history_record = {
-                    "timestamp_utc": datetime.utcnow().isoformat(),
-                    **signal_data,
-                }
-                append_signal_history(history_record)
-            else:
-                cooldown_text = f"⏳ Cooldown aktif: {symbol} için tekrar sinyal gönderilmedi."
-                print(cooldown_text)
-                if SEND_COOLDOWN_LOG:
-                    send_telegram(cooldown_text)
+        side, text, record = result
+        key = f"{symbol}_{side}"
+
+        if can_send_alert(key, state):
+            send_telegram(text)
+            append_signal_history(record)
+            mark_alert_sent(key, state)
+            found += 1
+            print(f"Sinyal gönderildi: {symbol} - {side}")
         else:
-            print(f"Pas geçildi: {symbol}")
+            print(f"Cooldown aktif: {symbol} - {side}")
 
-    if found == 0:
-        send_telegram("ℹ️ Bot çalıştı ama bu turda yüksek ihtimalli uygun sinyal bulunamadı.")
-        print("Uygun sinyal bulunamadı.")
+        # Binance API'ye fazla yük bindirmemek için çok küçük bekleme
+        time.sleep(0.08)
+
+    print(f"Toplam gönderilen sinyal: {found}")
 
 
 if __name__ == "__main__":
