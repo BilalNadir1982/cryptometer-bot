@@ -1,65 +1,75 @@
 import os
-import time
-import math
 import requests
 import pandas as pd
 from datetime import datetime
 
-# ====================================================
-# AYARLAR
-# ====================================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8701403795:AAFH5W28DmP1TVXRBCfZYn3wOiC8w8wEuAU")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "768262682")
+# =====================================================
+# TELEGRAM / ORTAM DEĞİŞKENLERİ
+# =====================================================
+TELEGRAM_TOKEN = os.getenv("8701403795:AAFH5W28DmP1TVXRBCfZYn3wOiC8w8wEuAU", "")
+TELEGRAM_CHAT_ID = os.getenv("768262682", "")
 
+# =====================================================
+# API URL
+# =====================================================
 COINGECKO_MARKETS_URL = "https://api.coingecko.com/api/v3/coins/markets"
 BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
 
-CHECK_INTERVAL_SEC = 300        # 5 dk
-MAX_COINS_TO_SCAN = 15          # rapid mover içinden teknik analize sokulacak coin sayısı
-COOLDOWN_SEC = 3600             # aynı coin için 1 saat susturma
+# =====================================================
+# BOT AYARLARI
+# =====================================================
+MAX_COINS_TO_SCAN = 20
 
-# Rapid mover ayarları
-MIN_1H_CHANGE = 3.0             # %1h değişim
-MIN_VOLUME_USD = 5_000_000      # minimum hacim
-RAPID_VOLUME_MULT = 1.5         # hacim ort. çarpanı
-RAPID_ATR_MULT = 1.2            # ATR bazlı hızlı hareket filtresi
-RAPID_BODY_PCT = 0.35           # mum gövde/oran filtresi
+# Rapid mover filtreleri
+MIN_1H_CHANGE = 3.0
+MIN_VOLUME_USD = 5_000_000
 
 # Teknik ayarlar
+INTERVAL = "15m"
+LIMIT = 260
+
 RSI_LEN = 14
 EMA_FAST = 20
 EMA_MID = 50
 EMA_SLOW = 200
 ATR_LEN = 14
 VOL_LEN = 20
-PIVOT_LEN = 20                  # İSTEDİĞİN GİBİ SABİT 20
+PIVOT_LEN = 20
+
 TREND_BUY_MIN = 60
 TREND_SELL_MAX = 40
+ADX_MIN = 22
+HARD_DROP_ATR = 2.3
 
-# Zaman dilimi
-INTERVAL = "15m"
-LIMIT = 260                     # EMA200 + pivot + hesaplar için yeterli veri
+RAPID_VOLUME_MULT = 1.5
+RAPID_ATR_MULT = 1.2
+RAPID_BODY_RATIO = 0.35
 
-last_sent = {}
-
-# ====================================================
+# =====================================================
 # TELEGRAM
-# ====================================================
+# =====================================================
 def send_telegram(text: str):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram bilgileri eksik.")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "HTML"
     }
+
     try:
-        requests.post(url, data=payload, timeout=15)
+        r = requests.post(url, data=payload, timeout=20)
+        print("Telegram status:", r.status_code)
+        print("Telegram response:", r.text[:500])
     except Exception as e:
         print("Telegram gönderim hatası:", e)
 
-# ====================================================
+# =====================================================
 # VERİ ÇEKME
-# ====================================================
+# =====================================================
 def get_rapid_movers():
     params = {
         "vs_currency": "usd",
@@ -68,18 +78,24 @@ def get_rapid_movers():
         "page": 1,
         "price_change_percentage": "1h,24h"
     }
-    r = requests.get(COINGECKO_MARKETS_URL, params=params, timeout=20)
+
+    r = requests.get(COINGECKO_MARKETS_URL, params=params, timeout=30)
     r.raise_for_status()
     data = r.json()
 
     movers = []
     for coin in data:
-        symbol = coin.get("symbol", "").upper()
+        symbol = str(coin.get("symbol", "")).upper().strip()
         change_1h = coin.get("price_change_percentage_1h_in_currency")
-        volume = coin.get("total_volume", 0)
-        price = coin.get("current_price", 0)
+        volume = float(coin.get("total_volume") or 0)
+        price = float(coin.get("current_price") or 0)
 
         if not symbol or change_1h is None:
+            continue
+
+        try:
+            change_1h = float(change_1h)
+        except Exception:
             continue
 
         if abs(change_1h) >= MIN_1H_CHANGE and volume >= MIN_VOLUME_USD:
@@ -100,55 +116,74 @@ def get_binance_klines(symbol: str, interval: str = INTERVAL, limit: int = LIMIT
         "interval": interval,
         "limit": limit
     }
-    r = requests.get(BINANCE_KLINES_URL, params=params, timeout=20)
-    if r.status_code != 200:
+
+    try:
+        r = requests.get(BINANCE_KLINES_URL, params=params, timeout=30)
+        if r.status_code != 200:
+            print(f"{pair} Binance veri alınamadı. Status={r.status_code}")
+            return None
+
+        raw = r.json()
+        if not isinstance(raw, list) or len(raw) == 0:
+            print(f"{pair} veri boş geldi.")
+            return None
+
+        cols = [
+            "open_time", "open", "high", "low", "close", "volume",
+            "close_time", "quote_asset_volume", "number_of_trades",
+            "taker_buy_base", "taker_buy_quote", "ignore"
+        ]
+        df = pd.DataFrame(raw, columns=cols)
+
+        for c in ["open", "high", "low", "close", "volume"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+        df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+        df.dropna(inplace=True)
+
+        if len(df) < 220:
+            print(f"{pair} için veri yetersiz: {len(df)} mum")
+            return None
+
+        return df
+
+    except Exception as e:
+        print(f"{pair} veri çekme hatası:", e)
         return None
 
-    raw = r.json()
-    if not isinstance(raw, list):
-        return None
-
-    cols = [
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "qav", "trades", "tbbav", "tbqav", "ignore"
-    ]
-    df = pd.DataFrame(raw, columns=cols)
-    for c in ["open", "high", "low", "close", "volume"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
-    return df
-
-# ====================================================
-# GÖSTERGE HESAPLARI
-# ====================================================
-def ema(series, length):
+# =====================================================
+# GÖSTERGELER
+# =====================================================
+def ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False).mean()
 
-def rsi(series, length=14):
+def rsi(series: pd.Series, length: int = 14) -> pd.Series:
     delta = series.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
-    avg_gain = gain.ewm(alpha=1/length, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1/length, adjust=False).mean()
+
+    avg_gain = gain.ewm(alpha=1 / length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / length, adjust=False).mean()
+
     rs = avg_gain / avg_loss.replace(0, 1e-10)
     return 100 - (100 / (1 + rs))
 
-def atr(df, length=14):
+def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
     high_low = df["high"] - df["low"]
     high_close = (df["high"] - df["close"].shift()).abs()
     low_close = (df["low"] - df["close"].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.ewm(alpha=1/length, adjust=False).mean()
+    return tr.ewm(alpha=1 / length, adjust=False).mean()
 
-def macd(series, fast=12, slow=26, signal=9):
-    ema_fast = ema(series, fast)
-    ema_slow = ema(series, slow)
-    macd_line = ema_fast - ema_slow
+def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    fast_ema = ema(series, fast)
+    slow_ema = ema(series, slow)
+    macd_line = fast_ema - slow_ema
     signal_line = ema(macd_line, signal)
     hist = macd_line - signal_line
     return macd_line, signal_line, hist
 
-def calc_adx(df, length=14):
+def calc_adx(df: pd.DataFrame, length: int = 14):
     high = df["high"]
     low = df["low"]
     close = df["close"]
@@ -170,18 +205,18 @@ def calc_adx(df, length=14):
     tr3 = (low - close.shift()).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
 
-    atr_rma = tr.ewm(alpha=1/length, adjust=False).mean()
-    plus_di = 100 * plus_dm.ewm(alpha=1/length, adjust=False).mean() / atr_rma.replace(0, 1e-10)
-    minus_di = 100 * minus_dm.ewm(alpha=1/length, adjust=False).mean() / atr_rma.replace(0, 1e-10)
+    atr_rma = tr.ewm(alpha=1 / length, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / length, adjust=False).mean() / atr_rma.replace(0, 1e-10)
+    minus_di = 100 * minus_dm.ewm(alpha=1 / length, adjust=False).mean() / atr_rma.replace(0, 1e-10)
 
     dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, 1e-10)
-    adx = dx.ewm(alpha=1/length, adjust=False).mean()
+    adx = dx.ewm(alpha=1 / length, adjust=False).mean()
     return plus_di, minus_di, adx
 
-# ====================================================
+# =====================================================
 # PIVOT / DİP / TEPE
-# ====================================================
-def detect_pivots(df, pivot_len=20):
+# =====================================================
+def detect_pivots(df: pd.DataFrame, pivot_len: int = 20) -> pd.DataFrame:
     lows = df["low"].tolist()
     highs = df["high"].tolist()
     n = len(df)
@@ -202,28 +237,29 @@ def detect_pivots(df, pivot_len=20):
     df["pivot_high"] = pivot_high
     return df
 
-# ====================================================
+# =====================================================
 # TREND YÜZDESİ
-# ====================================================
-def calc_trend_pct(row):
+# =====================================================
+def calc_trend_pct(row) -> int:
     score = 0
     score += 1 if row["ema20"] > row["ema50"] else -1
     score += 1 if row["ema50"] > row["ema200"] else -1
     score += 1 if row["close"] > row["ema20"] else -1
     score += 1 if row["rsi"] > 50 else -1
     score += 1 if row["macd"] > row["macd_signal"] else -1
-    score += 1 if row["adx"] > 22 else 0
+    score += 1 if row["adx"] > ADX_MIN else 0
     score += 1 if row["volume"] > row["vol_ma"] * 1.2 else -1
 
     pct = round(50 + (score / 7 * 50))
-    return max(0, min(100, pct))
+    pct = max(0, min(100, pct))
+    return int(pct)
 
-# ====================================================
+# =====================================================
 # ANALİZ
-# ====================================================
+# =====================================================
 def analyze_symbol(symbol: str):
     df = get_binance_klines(symbol)
-    if df is None or len(df) < 230:
+    if df is None:
         return None
 
     df["ema20"] = ema(df["close"], EMA_FAST)
@@ -238,14 +274,11 @@ def analyze_symbol(symbol: str):
 
     df = detect_pivots(df, PIVOT_LEN)
 
-    # Dip/tepe şartları
     df["dip_cond"] = df["pivot_low"] & (df["rsi"] < 38)
     df["tepe_cond"] = df["pivot_high"] & (df["rsi"] > 62)
 
-    # Trend %
     df["trend_pct"] = df.apply(calc_trend_pct, axis=1)
 
-    # Rapid movement iç filtre
     candle_range = (df["high"] - df["low"]).replace(0, 1e-10)
     candle_body = (df["close"] - df["open"]).abs()
     body_ratio = candle_body / candle_range
@@ -253,16 +286,15 @@ def analyze_symbol(symbol: str):
     df["rapid_up"] = (
         ((df["close"] - df["open"]) > df["atr"] * RAPID_ATR_MULT) &
         (df["volume"] > df["vol_ma"] * RAPID_VOLUME_MULT) &
-        (body_ratio > RAPID_BODY_PCT)
+        (body_ratio > RAPID_BODY_RATIO)
     )
 
     df["rapid_down"] = (
         ((df["open"] - df["close"]) > df["atr"] * RAPID_ATR_MULT) &
         (df["volume"] > df["vol_ma"] * RAPID_VOLUME_MULT) &
-        (body_ratio > RAPID_BODY_PCT)
+        (body_ratio > RAPID_BODY_RATIO)
     )
 
-    # 2 mum sonra sinyal
     df["buy_signal"] = (
         df["dip_cond"].shift(2).fillna(False) &
         (df["trend_pct"] >= TREND_BUY_MIN) &
@@ -281,9 +313,8 @@ def analyze_symbol(symbol: str):
         (df["rapid_down"] | (df["close"] < df["ema50"]))
     )
 
-    # Sert düşüş
     df["hard_drop"] = (
-        ((df["open"] - df["close"]) > df["atr"] * 2.3) &
+        ((df["open"] - df["close"]) > df["atr"] * HARD_DROP_ATR) &
         (df["close"] < df["ema20"]) &
         (df["rsi"] < 45)
     )
@@ -292,17 +323,19 @@ def analyze_symbol(symbol: str):
     prev1 = df.iloc[-2]
     prev2 = df.iloc[-3]
 
-    result = {
+    recent_dip = bool(last["dip_cond"] or prev1["dip_cond"] or prev2["dip_cond"])
+    recent_tepe = bool(last["tepe_cond"] or prev1["tepe_cond"] or prev2["tepe_cond"])
+
+    return {
         "symbol": symbol,
         "price": float(last["close"]),
         "trend_pct": int(last["trend_pct"]),
         "rsi": float(last["rsi"]),
         "adx": float(last["adx"]),
-        "ema20": float(last["ema20"]),
-        "ema50": float(last["ema50"]),
-        "ema200": float(last["ema200"]),
         "dip_now": bool(last["dip_cond"]),
         "tepe_now": bool(last["tepe_cond"]),
+        "recent_dip": recent_dip,
+        "recent_tepe": recent_tepe,
         "buy_now": bool(last["buy_signal"]),
         "sell_now": bool(last["sell_signal"]),
         "hard_drop_now": bool(last["hard_drop"]),
@@ -311,28 +344,12 @@ def analyze_symbol(symbol: str):
         "time": str(last["open_time"]),
     }
 
-    # Son birkaç mumda oluşmuş pivotu da yakalayalım
-    recent_dip = bool(last["dip_cond"] or prev1["dip_cond"] or prev2["dip_cond"])
-    recent_tepe = bool(last["tepe_cond"] or prev1["tepe_cond"] or prev2["tepe_cond"])
-
-    result["recent_dip"] = recent_dip
-    result["recent_tepe"] = recent_tepe
-
-    return result
-
-# ====================================================
-# MESAJ OLUŞTURMA
-# ====================================================
-def format_message(market_info, analysis):
-    symbol = analysis["symbol"]
-    price = analysis["price"]
-    trend_pct = analysis["trend_pct"]
-    rsi_val = analysis["rsi"]
-    adx_val = analysis["adx"]
-    change_1h = market_info["change_1h"]
-    volume = market_info["volume"]
-
+# =====================================================
+# MESAJ
+# =====================================================
+def format_message(market_info: dict, analysis: dict):
     signals = []
+
     if analysis["recent_dip"]:
         signals.append("🟢 DİP")
     if analysis["recent_tepe"]:
@@ -352,86 +369,61 @@ def format_message(market_info, analysis):
         return None
 
     trend_text = "KARARSIZ"
-    if trend_pct >= 60:
+    if analysis["trend_pct"] >= 60:
         trend_text = "YÜKSELİŞ"
-    elif trend_pct <= 40:
+    elif analysis["trend_pct"] <= 40:
         trend_text = "DÜŞÜŞ"
 
-    msg = (
-        f"<b>{symbol}USDT</b>\n"
-        f"Fiyat: <b>{price:.6f}</b>\n"
-        f"1s Değişim: <b>{change_1h:.2f}%</b>\n"
-        f"Hacim: <b>${volume:,.0f}</b>\n"
+    return (
+        f"<b>{analysis['symbol']}USDT</b>\n"
+        f"Fiyat: <b>{analysis['price']:.6f}</b>\n"
+        f"1s Değişim: <b>{market_info['change_1h']:.2f}%</b>\n"
+        f"Hacim: <b>${market_info['volume']:,.0f}</b>\n"
         f"Trend: <b>{trend_text}</b>\n"
-        f"Trend %: <b>{trend_pct}</b>\n"
-        f"RSI: <b>{rsi_val:.2f}</b>\n"
-        f"ADX: <b>{adx_val:.2f}</b>\n"
+        f"Trend %: <b>{analysis['trend_pct']}</b>\n"
+        f"RSI: <b>{analysis['rsi']:.2f}</b>\n"
+        f"ADX: <b>{analysis['adx']:.2f}</b>\n"
         f"Pivot: <b>20</b>\n"
         f"Sinyal: <b>{' | '.join(signals)}</b>\n"
         f"Zaman: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
     )
-    return msg
 
-# ====================================================
-# ANA DÖNGÜ
-# ====================================================
-def should_send(symbol, signal_key):
-    now = time.time()
-    key = f"{symbol}_{signal_key}"
-    last_time = last_sent.get(key, 0)
-    if now - last_time >= COOLDOWN_SEC:
-        last_sent[key] = now
-        return True
-    return False
-
-def run():
+# =====================================================
+# ANA ÇALIŞMA
+# =====================================================
+def run_once():
     print("Bot başladı...")
-    send_telegram("✅ Rapid Movement + Dip/Tepe + AL/SAT bot aktif")
 
-    while True:
-        try:
-            movers = get_rapid_movers()
-            print(f"Rapid mover bulundu: {len(movers)}")
+    movers = get_rapid_movers()
+    print(f"Rapid mover bulundu: {len(movers)}")
 
-            for coin in movers:
-                symbol = coin["symbol"]
+    if not movers:
+        send_telegram("ℹ️ Rapid mover bulunamadı.")
+        return
 
-                analysis = analyze_symbol(symbol)
-                if not analysis:
-                    continue
+    sent_count = 0
 
-                msg = format_message(coin, analysis)
-                if not msg:
-                    continue
+    for coin in movers:
+        symbol = coin["symbol"]
+        print(f"Analiz ediliyor: {symbol}USDT")
 
-                signal_key_parts = []
-                if analysis["recent_dip"]:
-                    signal_key_parts.append("dip")
-                if analysis["recent_tepe"]:
-                    signal_key_parts.append("tepe")
-                if analysis["buy_now"]:
-                    signal_key_parts.append("buy")
-                if analysis["sell_now"]:
-                    signal_key_parts.append("sell")
-                if analysis["hard_drop_now"]:
-                    signal_key_parts.append("harddrop")
-                if analysis["rapid_up_now"]:
-                    signal_key_parts.append("rapidup")
-                if analysis["rapid_down_now"]:
-                    signal_key_parts.append("rapiddown")
+        analysis = analyze_symbol(symbol)
+        if not analysis:
+            print(f"Analiz başarısız: {symbol}")
+            continue
 
-                signal_key = "_".join(signal_key_parts) if signal_key_parts else "generic"
+        msg = format_message(coin, analysis)
+        print(f"Mesaj üretildi mi? {'EVET' if msg else 'HAYIR'}")
 
-                if should_send(symbol, signal_key):
-                    print(f"Mesaj gönderildi: {symbol}")
-                    send_telegram(msg)
+        if msg:
+            print(msg)
+            send_telegram(msg)
+            sent_count += 1
 
-                time.sleep(1.2)
+    if sent_count == 0:
+        send_telegram("✅ Bot çalıştı ama bu turda uygun dip/tepe veya AL/SAT sinyali bulunamadı.")
 
-        except Exception as e:
-            print("HATA:", e)
-
-        time.sleep(CHECK_INTERVAL_SEC)
+    print(f"Toplam gönderilen mesaj: {sent_count}")
 
 if __name__ == "__main__":
-    run()
+    run_once()
