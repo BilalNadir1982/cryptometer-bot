@@ -7,8 +7,8 @@ import requests
 # =========================================================
 # TELEGRAM
 # =========================================================
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.getenv("8701403795:AAFH5W28DmP1TVXRBCfZYn3wOiC8w8wEuAU", "")
+TELEGRAM_CHAT_ID = os.getenv("768262682", "")
 
 def send_telegram(text: str) -> None:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
