@@ -33,6 +33,12 @@ TP1_PCT = 3.0
 TP2_PCT = 5.0
 TP3_PCT = 8.0
 
+# YENİ EKLENEN AYARLAR
+STRONG_SCORE_MIN = 5
+MEDIUM_SCORE_MIN = 4
+ALLOW_WEAK_SIGNALS = False
+SEND_COOLDOWN_LOG = True
+
 
 class APIError(Exception):
     pass
@@ -322,6 +328,14 @@ def smart_fake_pump_filter(
     return True, "Geçti"
 
 
+def classify_signal_strength(score: int) -> str:
+    if score >= STRONG_SCORE_MIN:
+        return "GÜÇLÜ"
+    elif score >= MEDIUM_SCORE_MIN:
+        return "ORTA"
+    return "ZAYIF"
+
+
 def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -> Optional[Tuple[str, Dict]]:
     move_side = str(mover.get("side", "")).upper()
     move_change = float(mover.get("change_detected", 0) or 0)
@@ -365,6 +379,12 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
     if score < MIN_SCORE_TO_ALERT:
         return None
 
+    strength = classify_signal_strength(score)
+
+    if strength == "ZAYIF" and not ALLOW_WEAK_SIGNALS:
+        print(f"{symbol} zayıf sinyal olduğu için elendi.")
+        return None
+
     entry_price = pick_entry_price(mover, live)
     levels = calc_trade_levels(entry_price)
     tv_pair = f"BINANCE:{symbol}USDT"
@@ -382,6 +402,7 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
 
     msg = (
         f"🚀 YÜKSEK İHTİMAL PUMP ADAYI: {symbol}\n"
+        f"Güç: {strength}\n"
         f"Skor: {score}/5\n"
         + "\n".join(f"• {r}" for r in reasons)
         + f"\n\n{level_text}\n\n"
@@ -391,6 +412,7 @@ def build_signal(symbol: str, mover: Dict, vf: Dict, large_trades: List[Dict]) -
 
     signal_data = {
         "symbol": symbol,
+        "strength": strength,
         "score": score,
         "move_side": move_side,
         "move_change_pct": round(move_change, 4),
@@ -452,7 +474,10 @@ def run_once() -> None:
                 }
                 append_signal_history(history_record)
             else:
-                print(f"Cooldown aktif, tekrar gönderilmedi: {symbol}")
+                cooldown_text = f"⏳ Cooldown aktif: {symbol} için tekrar sinyal gönderilmedi."
+                print(cooldown_text)
+                if SEND_COOLDOWN_LOG:
+                    send_telegram(cooldown_text)
         else:
             print(f"Pas geçildi: {symbol}")
 
