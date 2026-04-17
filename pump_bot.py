@@ -7,18 +7,13 @@ import requests
 # =========================================================
 # TELEGRAM
 # =========================================================
-import os
-from datetime import datetime
-import pandas as pd
-import requests
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-def send_telegram(text: str) -> None:
+def send_telegram(text: str) -> bool:
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram ayarları eksik.")
-        return
+        print("Telegram ayarlari eksik.")
+        return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -30,8 +25,14 @@ def send_telegram(text: str) -> None:
         r = requests.post(url, data=payload, timeout=20)
         print("Telegram status:", r.status_code)
         print("Telegram response:", r.text[:300])
+
+        if r.status_code == 200:
+            return True
+        return False
+
     except Exception as e:
-        print("Telegram gönderim hatası:", e)
+        print("Telegram gonderim hatasi:", e)
+        return False
 
 
 # =========================================================
@@ -53,7 +54,7 @@ EMA_FAST = 20
 
 
 # =========================================================
-# VERİ ÇEKME
+# VERI CEKME
 # =========================================================
 def get_rapid_movers():
     params = {
@@ -69,7 +70,7 @@ def get_rapid_movers():
         r.raise_for_status()
         data = r.json()
     except Exception as e:
-        print("CoinGecko veri çekme hatası:", e)
+        print("CoinGecko veri cekme hatasi:", e)
         return []
 
     movers = []
@@ -131,12 +132,12 @@ def get_klines(symbol: str):
         return df
 
     except Exception as e:
-        print(f"{symbol}USDT veri çekme hatası:", e)
+        print(f"{symbol}USDT veri cekme hatasi:", e)
         return None
 
 
 # =========================================================
-# GÖSTERGELER
+# GOSTERGELER
 # =========================================================
 def ema(series: pd.Series, length: int) -> pd.Series:
     return series.ewm(span=length, adjust=False).mean()
@@ -155,7 +156,7 @@ def rsi(series: pd.Series, length: int = 14) -> pd.Series:
 
 
 # =========================================================
-# PIVOT / DİP / TEPE
+# PIVOT / DIP / TEPE
 # =========================================================
 def detect_pivots(df: pd.DataFrame, pivot_len: int = 20) -> pd.DataFrame:
     lows = df["low"].tolist()
@@ -180,7 +181,7 @@ def detect_pivots(df: pd.DataFrame, pivot_len: int = 20) -> pd.DataFrame:
 
 
 # =========================================================
-# ANALİZ
+# ANALIZ
 # =========================================================
 def analyze_symbol(symbol: str):
     df = get_klines(symbol)
@@ -210,76 +211,91 @@ def analyze_symbol(symbol: str):
         "tepe": recent_tepe,
         "buy": buy_now,
         "sell": sell_now,
+        "rsi": float(last["rsi"]),
+        "ema20": float(last["ema20"]),
     }
 
 
 # =========================================================
 # MESAJ
 # =========================================================
-def format_message(coin: dict, analysis: dict):
-    symbol = coin["symbol"]
-    price = coin["price"]
-    change = coin["change"]
-    volume = coin["volume"]
-
-    direction = "🚀 YÜKSELİŞ" if change > 0 else "📉 DÜŞÜŞ"
-
+def get_strength(change: float) -> str:
     strength = "ZAYIF"
     if abs(change) > 5:
         strength = "ORTA"
     if abs(change) > 8:
-        strength = "GÜÇLÜ"
+        strength = "GUCLU"
+    return strength
 
-    # Sadece orta ve güçlü
+
+def format_signal_message(coin: dict, analysis: dict):
+    symbol = coin["symbol"]
+    price = analysis["price"]
+    change = coin["change"]
+    volume = coin["volume"]
+
+    direction = "YUKSELIS" if change > 0 else "DUSUS"
+    strength = get_strength(change)
+
     if strength == "ZAYIF":
         return None
 
     signals = []
 
     if analysis["dip"]:
-        signals.append("🟢 DİP")
+        signals.append("DIP")
     if analysis["tepe"]:
-        signals.append("🔴 TEPE")
+        signals.append("TEPE")
     if analysis["buy"]:
-        signals.append("✅ AL")
+        signals.append("AL")
     if analysis["sell"]:
-        signals.append("⛔ SAT")
+        signals.append("SAT")
 
     if not signals:
         return None
 
-    msg = f"""🔥 RAPID MOVEMENT TESPİT
-
-Coin: {symbol}
-Fiyat: ${price}
-
-Değişim (1h): %{round(change, 2)}
-Hacim: ${volume}
-
-Yön: {direction}
-Güç: {strength}
-
-Sinyal: {" | ".join(signals)}
-
-Zaman: {datetime.now().strftime('%H:%M:%S')}"""
-
+    msg = (
+        f"RAPID MOVEMENT TESPIT\n\n"
+        f"Coin: {symbol}\n"
+        f"Fiyat: ${price:.6f}\n"
+        f"Degisim (1h): %{change:.2f}\n"
+        f"Hacim: ${volume:,.0f}\n\n"
+        f"Yon: {direction}\n"
+        f"Guc: {strength}\n"
+        f"RSI: {analysis['rsi']:.2f}\n\n"
+        f"Sinyal: {' | '.join(signals)}\n"
+        f"Zaman: {datetime.now().strftime('%H:%M:%S')}"
+    )
     return msg
 
 
+def format_run_summary(total_movers: int, scanned_count: int, sent_count: int) -> str:
+    return (
+        f"BOT DURUM RAPORU\n\n"
+        f"Taranan rapid mover: {total_movers}\n"
+        f"Analiz edilen coin: {scanned_count}\n"
+        f"Gonderilen sinyal: {sent_count}\n"
+        f"Zaman: {datetime.now().strftime('%H:%M:%S')}"
+    )
+
+
 # =========================================================
-# ANA ÇALIŞMA
+# ANA CALISMA
 # =========================================================
 def run_once():
-    print("Bot başladı...")
+    print("Bot basladi...")
+
+    send_telegram("Bot calisti. Tarama basliyor...")
 
     movers = get_rapid_movers()
     print(f"Rapid mover bulundu: {len(movers)}")
 
     if not movers:
-        send_telegram("ℹ️ Rapid mover bulunamadı.")
+        send_telegram("Rapid mover bulunamadi.")
         return
 
     sent_count = 0
+    scanned_count = 0
 
     for coin in movers:
         symbol = coin["symbol"]
@@ -287,23 +303,28 @@ def run_once():
 
         analysis = analyze_symbol(symbol)
         if not analysis:
-            print(f"Analiz başarısız: {symbol}")
+            print(f"Analiz basarisiz: {symbol}")
             continue
 
-        msg = format_message(coin, analysis)
-        print(f"Mesaj üretildi mi? {'EVET' if msg else 'HAYIR'}")
+        scanned_count += 1
+
+        msg = format_signal_message(coin, analysis)
+        print(f"Mesaj uretildi mi? {'EVET' if msg else 'HAYIR'}")
 
         if msg:
             print(msg)
-            send_telegram(msg)
-            sent_count += 1
+            ok = send_telegram(msg)
+            if ok:
+                sent_count += 1
+
+    summary = format_run_summary(len(movers), scanned_count, sent_count)
+    send_telegram(summary)
 
     if sent_count == 0:
-        send_telegram("✅ Bot çalıştı ama bu turda uygun ORTA veya GÜÇLÜ sinyal bulunamadı.")
+        send_telegram("Bu turda uygun ORTA veya GUCLU sinyal bulunamadi.")
 
-    print(f"Toplam gönderilen mesaj: {sent_count}")
+    print(f"Toplam gonderilen mesaj: {sent_count}")
 
 
 if __name__ == "__main__":
     run_once()
-send_telegram("🚀 TEST MESAJI - BOT ÇALIŞIYOR")
