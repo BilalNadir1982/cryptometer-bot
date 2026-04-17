@@ -1,7 +1,8 @@
 import os
+import json
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # =========================
 # TELEGRAM
@@ -24,8 +25,24 @@ MIN_VOL = 1.2
 TP = 2.5
 SL = 1.2
 
+SIGNAL_FILE = "signals.json"
+
 # =========================
-# TOP GAINER / LOSER
+# JSON
+# =========================
+def load_signals():
+    try:
+        with open(SIGNAL_FILE) as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_signals(data):
+    with open(SIGNAL_FILE, "w") as f:
+        json.dump(data, f)
+
+# =========================
+# BINANCE DATA
 # =========================
 def get_top_movers():
     data = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr").json()
@@ -37,8 +54,7 @@ def get_top_movers():
 
         coins.append({
             "symbol": c["symbol"],
-            "change": float(c["priceChangePercent"]),
-            "volume": float(c["quoteVolume"])
+            "change": float(c["priceChangePercent"])
         })
 
     gainers = sorted(coins, key=lambda x: x["change"], reverse=True)[:15]
@@ -46,14 +62,16 @@ def get_top_movers():
 
     return gainers + losers
 
-# =========================
-# KLINE
-# =========================
+def get_price(symbol):
+    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/price",
+                     params={"symbol": symbol})
+    if r.status_code != 200:
+        return None
+    return float(r.json()["price"])
+
 def get_klines(symbol):
-    r = requests.get(
-        "https://fapi.binance.com/fapi/v1/klines",
-        params={"symbol": symbol, "interval": "15m", "limit": 50}
-    )
+    r = requests.get("https://fapi.binance.com/fapi/v1/klines",
+                     params={"symbol": symbol, "interval": "15m", "limit": 50})
 
     if r.status_code != 200:
         return None
@@ -79,7 +97,6 @@ def analyze(symbol):
     vol_avg = df["volume"].rolling(20).mean().iloc[-1]
     vol_ratio = last["volume"] / vol_avg if vol_avg else 0
 
-    # momentum
     up = last["close"] > df["close"].iloc[-3]
     down = last["close"] < df["close"].iloc[-3]
 
@@ -94,21 +111,19 @@ def analyze(symbol):
 # =========================
 # AKILLI SİNYAL
 # =========================
-def smart_signal(d, daily_change):
+def smart_signal(d, daily):
 
-    # DEVAM (trend devam)
-    if daily_change > 5 and d["change_15m"] > 0 and d["vol"] > 1.3:
-        return "LONG DEVAM 🚀"
+    if daily > 5 and d["change_15m"] > 0 and d["vol"] > 1.3:
+        return "LONG"
 
-    if daily_change < -5 and d["change_15m"] < 0 and d["vol"] > 1.3:
-        return "SHORT DEVAM 📉"
+    if daily < -5 and d["change_15m"] < 0 and d["vol"] > 1.3:
+        return "SHORT"
 
-    # DÖNÜŞ
-    if daily_change > 8 and d["change_15m"] < 0:
-        return "SHORT (DÖNÜŞ) ⚠️"
+    if daily > 8 and d["change_15m"] < 0:
+        return "SHORT REVERSAL"
 
-    if daily_change < -8 and d["change_15m"] > 0:
-        return "LONG (DÖNÜŞ) ⚠️"
+    if daily < -8 and d["change_15m"] > 0:
+        return "LONG REVERSAL"
 
     return None
 
@@ -122,17 +137,78 @@ def levels(price, signal):
     else:
         tp = price * (1 - TP/100)
         sl = price * (1 + SL/100)
-
     return tp, sl
+
+# =========================
+# TAKİP
+# =========================
+def check_old_signals():
+    signals = load_signals()
+    results = []
+
+    for k, s in signals.items():
+        if s["done"]:
+            continue
+
+        t = datetime.fromisoformat(s["time"])
+
+        if datetime.now() - t < timedelta(minutes=15):
+            continue
+
+        price = get_price(s["coin"])
+        if not price:
+            continue
+
+        result = "DEVAM"
+
+        if "LONG" in s["signal"]:
+            if price >= s["tp"]:
+                result = "TP"
+            elif price <= s["sl"]:
+                result = "SL"
+
+        else:
+            if price <= s["tp"]:
+                result = "TP"
+            elif price >= s["sl"]:
+                result = "SL"
+
+        s["done"] = True
+        s["result"] = result
+
+        results.append((s["coin"], result))
+
+    save_signals(signals)
+    return results
+
+# =========================
+# PANEL
+# =========================
+def panel():
+    signals = load_signals()
+
+    done = [s for s in signals.values() if s.get("done")]
+    win = [s for s in done if s.get("result") == "TP"]
+
+    total = len(done)
+    wr = (len(win)/total)*100 if total else 0
+
+    return f"📊 PANEL\nToplam: {total}\nWinrate: %{wr:.1f}"
 
 # =========================
 # MAIN
 # =========================
 def run():
-    send("🚀 SMART BOT BAŞLADI")
+    send("🚀 BOT ÇALIŞTI")
+
+    # eski sonuçlar
+    for coin, res in check_old_signals():
+        send(f"📊 SONUÇ\n{coin} → {res}")
 
     coins = get_top_movers()
-    signals = []
+    signals = load_signals()
+
+    new_count = 0
 
     for c in coins:
         sym = c["symbol"]
@@ -142,56 +218,36 @@ def run():
         if not d:
             continue
 
-        signal = smart_signal(d, daily)
-        if not signal:
-            continue
-
         if abs(d["change_15m"]) < MIN_15M_CHANGE:
             continue
 
         if d["vol"] < MIN_VOL:
             continue
 
+        signal = smart_signal(d, daily)
+        if not signal:
+            continue
+
         tp, sl = levels(d["price"], signal)
 
-        score = abs(daily) + abs(d["change_15m"]) + d["vol"]
+        send(f"🔥 SİNYAL\n{sym}\n{signal}\nEntry: {d['price']:.4f}")
 
-        signals.append({
-            "sym": sym,
-            "signal": signal,
-            "price": d["price"],
+        signals[sym + str(datetime.now())] = {
+            "coin": sym,
+            "entry": d["price"],
             "tp": tp,
             "sl": sl,
-            "daily": daily,
-            "m15": d["change_15m"],
-            "vol": d["vol"],
-            "score": score
-        })
+            "signal": signal,
+            "time": datetime.now().isoformat(),
+            "done": False
+        }
 
-    # en güçlü 5 coin
-    signals = sorted(signals, key=lambda x: x["score"], reverse=True)[:5]
+        new_count += 1
 
-    if not signals:
-        send("❌ Sinyal yok")
-        return
+    save_signals(signals)
 
-    for s in signals:
-        msg = (
-            f"🔥 AKILLI SİNYAL\n\n"
-            f"{s['sym']}\n\n"
-            f"{s['signal']}\n\n"
-            f"Giriş: {s['price']:.4f}\n"
-            f"🎯 TP: {s['tp']:.4f}\n"
-            f"🛑 SL: {s['sl']:.4f}\n\n"
-            f"24h: %{s['daily']:.2f}\n"
-            f"15dk: %{s['m15']:.2f}\n"
-            f"Hacim: x{s['vol']:.2f}\n\n"
-            f"Saat: {datetime.now().strftime('%H:%M:%S')}"
-        )
-
-        send(msg)
-
-    send("📊 Tarama tamamlandı")
+    send(panel())
+    send(f"📡 Yeni sinyal: {new_count}")
 
 if __name__ == "__main__":
     run()
