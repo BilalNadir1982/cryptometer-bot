@@ -1,253 +1,165 @@
 import os
-import json
 import requests
-import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# =========================
-# TELEGRAM
-# =========================
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CRYPTOMETER_API_KEY = os.getenv("CRYPTOMETER_API_KEY")
 
-def send(msg):
-    requests.post(
-        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-        data={"chat_id": CHAT_ID, "text": msg}
-    )
-
-# =========================
-# AYARLAR
-# =========================
-MIN_15M_CHANGE = 0.8
-MIN_VOL = 1.2
-
-TP = 2.5
-SL = 1.2
-
-SIGNAL_FILE = "signals.json"
-
-# =========================
-# JSON
-# =========================
-def load_signals():
+def send(msg: str):
+    if not TOKEN or not CHAT_ID:
+        print("Telegram ayarlari eksik")
+        return
     try:
-        with open(SIGNAL_FILE) as f:
-            return json.load(f)
-    except:
-        return {}
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": msg},
+            timeout=20
+        )
+        print("Telegram:", r.status_code, r.text[:200])
+    except Exception as e:
+        print("Telegram hata:", e)
 
-def save_signals(data):
-    with open(SIGNAL_FILE, "w") as f:
-        json.dump(data, f)
-
-# =========================
-# BINANCE DATA
-# =========================
-def get_top_movers():
-    data = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr").json()
-
-    coins = []
-    for c in data:
-        if "USDT" not in c["symbol"]:
-            continue
-
-        coins.append({
-            "symbol": c["symbol"],
-            "change": float(c["priceChangePercent"])
-        })
-
-    gainers = sorted(coins, key=lambda x: x["change"], reverse=True)[:15]
-    losers = sorted(coins, key=lambda x: x["change"])[:15]
-
-    return gainers + losers
-
-def get_price(symbol):
-    r = requests.get("https://fapi.binance.com/fapi/v1/ticker/price",
-                     params={"symbol": symbol})
+def cm_get(path: str, params: dict):
+    base = "https://api.cryptometer.io"
+    all_params = dict(params)
+    all_params["api_key"] = CRYPTOMETER_API_KEY
+    r = requests.get(f"{base}{path}", params=all_params, timeout=30)
+    print("CM:", path, r.status_code)
     if r.status_code != 200:
         return None
-    return float(r.json()["price"])
-
-def get_klines(symbol):
-    r = requests.get("https://fapi.binance.com/fapi/v1/klines",
-                     params={"symbol": symbol, "interval": "15m", "limit": 50})
-
-    if r.status_code != 200:
+    try:
+        data = r.json()
+    except Exception:
         return None
-
-    df = pd.DataFrame(r.json())
-    df = df[[4,5]]
-    df.columns = ["close","volume"]
-    return df.astype(float)
-
-# =========================
-# ANALİZ
-# =========================
-def analyze(symbol):
-    df = get_klines(symbol)
-    if df is None or len(df) < 30:
+    if str(data.get("success")).lower() != "true":
         return None
+    return data.get("data")
 
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
+def get_binance_futures_large_activity():
+    return cm_get("/large-trades-activity/", {"e": "binance_futures"}) or []
 
-    change_15m = ((last["close"] - prev["close"]) / prev["close"]) * 100
+def get_whale_trades(symbol: str):
+    # docs örneğinde symbol btc gibi geçiyor
+    return cm_get("/xtrades/", {"e": "binance_futures", "symbol": symbol.lower()}) or []
 
-    vol_avg = df["volume"].rolling(20).mean().iloc[-1]
-    vol_ratio = last["volume"] / vol_avg if vol_avg else 0
+def get_rapid_movements():
+    return cm_get("/rapid-movements/", {}) or []
 
-    up = last["close"] > df["close"].iloc[-3]
-    down = last["close"] < df["close"].iloc[-3]
+def get_open_interest(symbol: str):
+    # pair formatı dokümanda market_pair ile geçiyor; borsaya göre değişebilir
+    pair = symbol.lower()
+    data = cm_get("/open-interest/", {"e": "binance_futures", "market_pair": pair})
+    return data or []
 
-    return {
-        "price": last["close"],
-        "change_15m": change_15m,
-        "vol": vol_ratio,
-        "up": up,
-        "down": down
-    }
+def summarize_whales(rows):
+    buy_total = 0.0
+    sell_total = 0.0
 
-# =========================
-# AKILLI SİNYAL
-# =========================
-def smart_signal(d, daily):
+    for x in rows:
+        side = str(x.get("side", "")).upper()
+        total = float(x.get("total") or 0)
+        if side == "BUY":
+            buy_total += total
+        elif side == "SELL":
+            sell_total += total
 
-    if daily > 5 and d["change_15m"] > 0 and d["vol"] > 1.3:
-        return "LONG"
+    net = buy_total - sell_total
+    return buy_total, sell_total, net
 
-    if daily < -5 and d["change_15m"] < 0 and d["vol"] > 1.3:
-        return "SHORT"
+def pick_candidates():
+    candidates = {}
 
-    if daily > 8 and d["change_15m"] < 0:
-        return "SHORT REVERSAL"
+    activity = get_binance_futures_large_activity()
+    for row in activity:
+        pair = str(row.get("pair", "")).upper().replace("-", "")
+        if pair.endswith("USDT"):
+            candidates[pair] = {"source": "large_activity"}
 
-    if daily < -8 and d["change_15m"] > 0:
-        return "LONG REVERSAL"
+    rapid = get_rapid_movements()
+    for row in rapid:
+        pair = str(row.get("pair", "")).upper().replace("-", "")
+        exch = str(row.get("exchange", "")).lower()
+        if pair.endswith("USDT") and "binance" in exch:
+            candidates[pair] = {"source": "rapid"}
 
-    return None
+    return list(candidates.keys())[:10]
 
-# =========================
-# TP SL
-# =========================
-def levels(price, signal):
-    if "LONG" in signal:
-        tp = price * (1 + TP/100)
-        sl = price * (1 - SL/100)
-    else:
-        tp = price * (1 - TP/100)
-        sl = price * (1 + SL/100)
-    return tp, sl
+def classify_signal(symbol: str):
+    base_symbol = symbol.replace("USDT", "")
+    whale_rows = get_whale_trades(base_symbol)
+    if not whale_rows:
+        return None, "whale_veri_yok"
 
-# =========================
-# TAKİP
-# =========================
-def check_old_signals():
-    signals = load_signals()
-    results = []
+    buy_total, sell_total, net = summarize_whales(whale_rows)
 
-    for k, s in signals.items():
-        if s["done"]:
-            continue
+    oi_rows = get_open_interest(base_symbol)
+    oi_value = None
+    if oi_rows and isinstance(oi_rows, list) and len(oi_rows) > 0:
+        try:
+            oi_value = float(oi_rows[0].get("open_interest"))
+        except Exception:
+            oi_value = None
 
-        t = datetime.fromisoformat(s["time"])
+    if buy_total > sell_total * 1.35 and net > 250000:
+        return {
+            "signal": "LONG WHALE",
+            "buy_total": buy_total,
+            "sell_total": sell_total,
+            "net": net,
+            "oi": oi_value,
+        }, None
 
-        if datetime.now() - t < timedelta(minutes=15):
-            continue
+    if sell_total > buy_total * 1.35 and net < -250000:
+        return {
+            "signal": "SHORT WHALE",
+            "buy_total": buy_total,
+            "sell_total": sell_total,
+            "net": net,
+            "oi": oi_value,
+        }, None
 
-        price = get_price(s["coin"])
-        if not price:
-            continue
+    return None, "denge_var"
 
-        result = "DEVAM"
-
-        if "LONG" in s["signal"]:
-            if price >= s["tp"]:
-                result = "TP"
-            elif price <= s["sl"]:
-                result = "SL"
-
-        else:
-            if price <= s["tp"]:
-                result = "TP"
-            elif price >= s["sl"]:
-                result = "SL"
-
-        s["done"] = True
-        s["result"] = result
-
-        results.append((s["coin"], result))
-
-    save_signals(signals)
-    return results
-
-# =========================
-# PANEL
-# =========================
-def panel():
-    signals = load_signals()
-
-    done = [s for s in signals.values() if s.get("done")]
-    win = [s for s in done if s.get("result") == "TP"]
-
-    total = len(done)
-    wr = (len(win)/total)*100 if total else 0
-
-    return f"📊 PANEL\nToplam: {total}\nWinrate: %{wr:.1f}"
-
-# =========================
-# MAIN
-# =========================
 def run():
-    send("🚀 BOT ÇALIŞTI")
+    send("🐋 CryptoMeter Whale Bot çalıştı")
 
-    # eski sonuçlar
-    for coin, res in check_old_signals():
-        send(f"📊 SONUÇ\n{coin} → {res}")
+    if not CRYPTOMETER_API_KEY:
+        send("❌ CRYPTOMETER_API_KEY eksik")
+        return
 
-    coins = get_top_movers()
-    signals = load_signals()
+    candidates = pick_candidates()
+    if not candidates:
+        send("❌ Aday coin bulunamadı")
+        return
 
-    new_count = 0
+    found = 0
+    reject = {}
 
-    for c in coins:
-        sym = c["symbol"]
-        daily = c["change"]
-
-        d = analyze(sym)
-        if not d:
+    for symbol in candidates:
+        result, reason = classify_signal(symbol)
+        if not result:
+            reject[reason] = reject.get(reason, 0) + 1
+            print(symbol, "elendi:", reason)
             continue
 
-        if abs(d["change_15m"]) < MIN_15M_CHANGE:
-            continue
+        msg = (
+            f"🐋 BALİNA SİNYALİ\n\n"
+            f"Coin: {symbol}\n"
+            f"Tür: {result['signal']}\n"
+            f"Whale Buy: ${result['buy_total']:,.0f}\n"
+            f"Whale Sell: ${result['sell_total']:,.0f}\n"
+            f"Net: ${result['net']:,.0f}\n"
+            f"Open Interest: {result['oi'] if result['oi'] is not None else 'yok'}\n"
+            f"Saat: {datetime.now().strftime('%H:%M:%S')}"
+        )
+        send(msg)
+        found += 1
 
-        if d["vol"] < MIN_VOL:
-            continue
+    if found == 0:
+        send(f"❌ Sinyal yok | Eleme: {reject}")
 
-        signal = smart_signal(d, daily)
-        if not signal:
-            continue
-
-        tp, sl = levels(d["price"], signal)
-
-        send(f"🔥 SİNYAL\n{sym}\n{signal}\nEntry: {d['price']:.4f}")
-
-        signals[sym + str(datetime.now())] = {
-            "coin": sym,
-            "entry": d["price"],
-            "tp": tp,
-            "sl": sl,
-            "signal": signal,
-            "time": datetime.now().isoformat(),
-            "done": False
-        }
-
-        new_count += 1
-
-    save_signals(signals)
-
-    send(panel())
-    send(f"📡 Yeni sinyal: {new_count}")
+    send(f"📊 Tarama bitti | Sinyal: {found}")
 
 if __name__ == "__main__":
     run()
