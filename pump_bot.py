@@ -15,16 +15,16 @@ ALPHA_BASE_URL = "https://www.binance.com"
 
 REQUEST_TIMEOUT = 20
 
-# Daha agresif ayarlar
+# PRO ayarlar
 SPOT_INTERVAL = "5m"
 SPOT_KLINE_LIMIT = 120
 SPOT_TOP_SYMBOLS_LIMIT = 60
 SPOT_MIN_QUOTE_VOLUME_USDT = 3_000_000
-SPOT_SIGNAL_THRESHOLD = 4
+SPOT_SIGNAL_THRESHOLD = 5
 
 ALPHA_INTERVAL = "5m"
 ALPHA_KLINE_LIMIT = 120
-ALPHA_SIGNAL_THRESHOLD = 4
+ALPHA_SIGNAL_THRESHOLD = 5
 ALPHA_MAX_SYMBOLS = 80
 
 MAX_SEND_PER_GROUP = 5
@@ -205,8 +205,9 @@ def analyze_spot_symbol(symbol_data):
 
     last_close = closes[-1]
     prev_close = closes[-2]
-    close_5 = closes[-6] if len(closes) >= 6 else closes[0]
-    close_15 = closes[-16] if len(closes) >= 16 else closes[0]
+    c3 = closes[-4]
+    close_5 = closes[-6]
+    close_15 = closes[-16]
 
     rsi_val = rsi(closes, 14)
     ema_20 = ema(closes, 20)
@@ -216,6 +217,7 @@ def analyze_spot_symbol(symbol_data):
     avg_vol_20 = sum(volumes[-21:-1]) / 20 if len(volumes) >= 21 else sum(volumes[:-1]) / max(len(volumes) - 1, 1)
 
     move_1 = pct_change(prev_close, last_close)
+    move_3 = pct_change(c3, last_close)
     move_5 = pct_change(close_5, last_close)
     move_15 = pct_change(close_15, last_close)
     volume_ratio = (last_vol / avg_vol_20) if avg_vol_20 > 0 else 0
@@ -228,35 +230,35 @@ def analyze_spot_symbol(symbol_data):
     if ema_20 and ema_50:
         if ema_20 > ema_50:
             trend = "YUKARI"
-            bull_score += 1
+            bull_score += 2
             reasons.append("EMA20>EMA50")
         else:
             trend = "AŞAĞI"
-            bear_score += 1
+            bear_score += 2
             reasons.append("EMA20<EMA50")
 
-    if move_1 >= 0.5:
+    if 0.3 <= move_1 <= 3:
         bull_score += 1
         reasons.append(f"1 mum %+{move_1:.2f}")
-    elif move_1 <= -0.5:
+    elif move_1 < -0.8:
         bear_score += 1
         reasons.append(f"1 mum %{move_1:.2f}")
 
-    if move_5 >= 1.2:
+    if 0.8 <= move_5 <= 8:
         bull_score += 2
         reasons.append(f"5 mum %+{move_5:.2f}")
-    elif move_5 <= -1.2:
+    elif move_5 < -2:
         bear_score += 2
         reasons.append(f"5 mum %{move_5:.2f}")
 
-    if move_15 >= 2.0:
+    if 1.5 <= move_15 <= 12:
         bull_score += 2
         reasons.append(f"15 mum %+{move_15:.2f}")
-    elif move_15 <= -2.0:
+    elif move_15 < -4:
         bear_score += 2
         reasons.append(f"15 mum %{move_15:.2f}")
 
-    if volume_ratio >= 1.4:
+    if 1.2 <= volume_ratio <= 5:
         if move_1 >= 0:
             bull_score += 2
             reasons.append(f"Alım hacmi x{volume_ratio:.2f}")
@@ -265,21 +267,44 @@ def analyze_spot_symbol(symbol_data):
             reasons.append(f"Satış hacmi x{volume_ratio:.2f}")
 
     if rsi_val is not None:
-        if 48 <= rsi_val <= 70:
+        if 50 <= rsi_val <= 65:
+            bull_score += 2
+            reasons.append(f"RSI ideal {rsi_val:.1f}")
+        elif 65 < rsi_val <= 72:
             bull_score += 1
-            reasons.append(f"RSI uygun {rsi_val:.1f}")
+            reasons.append(f"RSI güçlü {rsi_val:.1f}")
         elif rsi_val >= 75:
-            bear_score += 1
-            reasons.append(f"RSI şişmiş {rsi_val:.1f}")
-        elif rsi_val <= 32:
-            reasons.append(f"RSI dipte {rsi_val:.1f}")
+            bear_score += 2
+            reasons.append(f"RSI aşırı şişmiş {rsi_val:.1f}")
+        elif rsi_val <= 35:
+            bull_score += 1
+            reasons.append(f"RSI dip {rsi_val:.1f}")
 
-    if symbol_data["price_change_percent_24h"] >= 2:
+    if 1 <= symbol_data["price_change_percent_24h"] <= 15:
         bull_score += 1
         reasons.append(f"24s %+{symbol_data['price_change_percent_24h']:.2f}")
-    elif symbol_data["price_change_percent_24h"] <= -2:
+    elif symbol_data["price_change_percent_24h"] < -4:
         bear_score += 1
         reasons.append(f"24s %{symbol_data['price_change_percent_24h']:.2f}")
+
+    # PRO FİLTRELER
+    if rsi_val is not None and rsi_val >= 85:
+        return None
+
+    if move_5 > 10:
+        return None
+
+    if move_15 > 18:
+        return None
+
+    if volume_ratio < 1.05:
+        return None
+
+    if ema_20 and ema_50 and ema_20 < ema_50 and bull_score > bear_score:
+        return None
+
+    if move_1 > 4 or move_3 > 7:
+        return None
 
     if bull_score >= SPOT_SIGNAL_THRESHOLD and bull_score > bear_score:
         return {
@@ -408,10 +433,12 @@ def analyze_alpha_symbol(symbol):
 
     last = closes[-1]
     prev = closes[-2]
+    c3 = closes[-4]
     c5 = closes[-6]
     c15 = closes[-16]
 
     move_1 = pct_change(prev, last)
+    move_3 = pct_change(c3, last)
     move_5 = pct_change(c5, last)
     move_15 = pct_change(c15, last)
 
@@ -438,28 +465,28 @@ def analyze_alpha_symbol(symbol):
             bear_score += 2
             reasons.append("EMA20<EMA50")
 
-    if move_1 >= 0.5:
+    if 0.4 <= move_1 <= 4:
         bull_score += 1
         reasons.append(f"1 mum %+{move_1:.2f}")
-    elif move_1 <= -0.5:
+    elif move_1 < -0.7:
         bear_score += 1
         reasons.append(f"1 mum %{move_1:.2f}")
 
-    if move_5 >= 1.0:
+    if 1 <= move_5 <= 12:
         bull_score += 2
         reasons.append(f"5 mum %+{move_5:.2f}")
-    elif move_5 <= -1.0:
+    elif move_5 < -2:
         bear_score += 2
         reasons.append(f"5 mum %{move_5:.2f}")
 
-    if move_15 >= 1.8:
+    if 2 <= move_15 <= 18:
         bull_score += 2
         reasons.append(f"15 mum %+{move_15:.2f}")
-    elif move_15 <= -1.8:
+    elif move_15 < -4:
         bear_score += 2
         reasons.append(f"15 mum %{move_15:.2f}")
 
-    if volume_ratio >= 1.3:
+    if 1.3 <= volume_ratio <= 6:
         if move_1 >= 0:
             bull_score += 2
             reasons.append(f"Alım hacmi x{volume_ratio:.2f}")
@@ -468,14 +495,18 @@ def analyze_alpha_symbol(symbol):
             reasons.append(f"Satış hacmi x{volume_ratio:.2f}")
 
     if rsi_val is not None:
-        if 45 <= rsi_val <= 72:
+        if 50 <= rsi_val <= 65:
+            bull_score += 2
+            reasons.append(f"RSI ideal {rsi_val:.1f}")
+        elif 65 < rsi_val <= 72:
             bull_score += 1
-            reasons.append(f"RSI uygun {rsi_val:.1f}")
-        elif rsi_val >= 78:
-            bear_score += 1
-            reasons.append(f"RSI şişmiş {rsi_val:.1f}")
-        elif rsi_val <= 30:
-            reasons.append(f"RSI dipte {rsi_val:.1f}")
+            reasons.append(f"RSI güçlü {rsi_val:.1f}")
+        elif rsi_val >= 75:
+            bear_score += 2
+            reasons.append(f"RSI aşırı şişmiş {rsi_val:.1f}")
+        elif rsi_val <= 35:
+            bull_score += 1
+            reasons.append(f"RSI dip {rsi_val:.1f}")
 
     try:
         price_change_24h = float(ticker.get("priceChangePercent", 0))
@@ -484,12 +515,31 @@ def analyze_alpha_symbol(symbol):
         price_change_24h = 0.0
         quote_volume_24h = 0.0
 
-    if price_change_24h >= 2.5:
+    if 1 <= price_change_24h <= 20:
         bull_score += 1
         reasons.append(f"24s %+{price_change_24h:.2f}")
-    elif price_change_24h <= -2.5:
+    elif price_change_24h < -5:
         bear_score += 1
         reasons.append(f"24s %{price_change_24h:.2f}")
+
+    # PRO FİLTRELER
+    if rsi_val is not None and rsi_val >= 85:
+        return None
+
+    if move_5 > 20:
+        return None
+
+    if move_15 > 30:
+        return None
+
+    if volume_ratio < 1.05:
+        return None
+
+    if ema20 and ema50 and ema20 < ema50 and bull_score > bear_score:
+        return None
+
+    if move_1 > 6 or move_3 > 10:
+        return None
 
     if bull_score >= ALPHA_SIGNAL_THRESHOLD and bull_score > bear_score:
         return {
@@ -606,12 +656,33 @@ def format_group(title, items):
 
 def main():
     log("Bot çalıştı. Spot + Alpha tarama başlıyor...")
-
-    # Test mesajı
     send_telegram("✅ Test mesajı: Bot çalıştı, tarama başlıyor.")
 
-    spot_up, spot_down, spot_errors = scan_spot_market()
-    alpha_up, alpha_down, alpha_errors = scan_alpha_market()
+    try:
+        send_telegram("📊 Spot tarama başladı...")
+        spot_up, spot_down, spot_errors = scan_spot_market()
+        send_telegram(
+            f"✅ Spot tarama bitti\n"
+            f"Yükseliş: {len(spot_up)}\n"
+            f"Düşüş: {len(spot_down)}\n"
+            f"Hata: {spot_errors}"
+        )
+    except Exception as e:
+        send_telegram(f"❌ Spot tarama hatası: {e}")
+        spot_up, spot_down, spot_errors = [], [], 1
+
+    try:
+        send_telegram("🧪 Alpha tarama başladı...")
+        alpha_up, alpha_down, alpha_errors = scan_alpha_market()
+        send_telegram(
+            f"✅ Alpha tarama bitti\n"
+            f"Yükseliş: {len(alpha_up)}\n"
+            f"Düşüş: {len(alpha_down)}\n"
+            f"Hata: {alpha_errors}"
+        )
+    except Exception as e:
+        send_telegram(f"❌ Alpha tarama hatası: {e}")
+        alpha_up, alpha_down, alpha_errors = [], [], 1
 
     total_errors = spot_errors + alpha_errors
     total_found = len(spot_up) + len(spot_down) + len(alpha_up) + len(alpha_down)
