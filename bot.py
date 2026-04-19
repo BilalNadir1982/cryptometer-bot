@@ -125,7 +125,7 @@ def get_candidate_coins():
     return out[:25]
 
 
-def get_binance_symbols():
+get_klines
     info = binance_get("/fapi/v1/exchangeInfo")
     symbols = set()
     for s in info.get("symbols", []):
