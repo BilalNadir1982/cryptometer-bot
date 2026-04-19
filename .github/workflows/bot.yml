@@ -1,8 +1,8 @@
-name: Futures Signal Bot
+name: Free Max Signal Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repo çek
+      - name: Repo cek
         uses: actions/checkout@v4
 
       - name: Python kur
@@ -26,34 +26,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Config dosyasını oluştur
-        run: |
-          cat > config.json << 'EOF'
-          {
-            "telegram_bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
-            "telegram_chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
-            "scan_interval_minutes": 15,
-            "min_quote_volume_usdt": 10000000,
-            "min_price_change_percent_24h": 2.0,
-            "max_symbols": 60,
-            "cooldown_minutes": 60,
-            "score_threshold_strong": 8,
-            "score_threshold_medium": 6,
-            "tp_atr_multiplier": 2.2,
-            "sl_atr_multiplier": 1.2,
-            "summary_hour_istanbul": 23,
-            "include_symbols": [],
-            "exclude_symbols": ["BTCUSDT", "ETHUSDT"]
-          }
-          EOF
+      - name: Botu calistir
+        env:
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
 
-      - name: Botu çalıştır
-  run: python cryptometer-bot/bot.py
-
-      - name: State dosyalarını commit et
+      - name: State kaydet
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json signals.json results.json || true
-          git diff --cached --quiet || git commit -m "bot state update"
+          git add state.json || true
+          git diff --cached --quiet || git commit -m "update bot state"
           git push
