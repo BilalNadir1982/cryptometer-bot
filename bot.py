@@ -74,7 +74,9 @@ def analyze():
         if score >= 4:
             direction = "🚀 LONG" if ch1 > 0 else "🔻 SHORT"
 
-            msg = f"""
+            nedenler = "\n- ".join(reasons)
+
+msg = f"""
 <b>{name} {direction}</b>
 
 Fiyat: {price}
@@ -84,7 +86,7 @@ Skor: {score}/10
 24h: {round(ch24,2)}%
 
 Neden:
-- {"\n- ".join(reasons)}
+- {nedenler}
 """
             signals.append(msg)
 
