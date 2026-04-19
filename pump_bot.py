@@ -11,9 +11,9 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 BASE_URL = "https://data-api.binance.vision"
 
 INTERVAL = "5m"
-KLINE_LIMIT = 120
-TOP_SYMBOLS_LIMIT = 40
-MIN_QUOTE_VOLUME_USDT = 10_000_000  # aşırı ölü coinleri ele
+TOP_SYMBOLS_LIMIT = 50
+SIGNAL_SCORE_THRESHOLD = 5
+MIN_QUOTE_VOLUME_USDT = 7_500_000  # aşırı ölü coinleri ele
 SIGNAL_SCORE_THRESHOLD = 5
 
 REQUEST_TIMEOUT = 20
