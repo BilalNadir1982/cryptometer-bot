@@ -16,8 +16,20 @@ def send_telegram(text):
     requests.post(url, data=data, timeout=20)
 
 def get_market_data():
-    r = requests.get(BINANCE_URL)
-    return r.json()
+    try:
+        r = requests.get(BINANCE_URL, timeout=20)
+        data = r.json()
+
+        # Eğer veri liste değilse hata var demektir
+        if not isinstance(data, list):
+            print("API hata verdi:", data)
+            return []
+
+        return data
+
+    except Exception as e:
+        print("API bağlantı hatası:", e)
+        return []
 
 def filter_coins(data):
     coins = []
@@ -58,7 +70,12 @@ def main():
     print("Bot çalıştı - tarama başlıyor")
 
     data = get_market_data()
-    coins = filter_coins(data)
+
+if not data:
+    send_telegram("❌ Binance veri alınamadı")
+    return
+
+coins = filter_coins(data)
     signals = find_signals(coins)
 
     if signals:
