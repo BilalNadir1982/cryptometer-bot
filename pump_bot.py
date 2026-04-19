@@ -1,6 +1,5 @@
 import os
 import requests
-from datetime import datetime
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -20,15 +19,14 @@ def get_market_data():
         r = requests.get(BINANCE_URL, timeout=20)
         data = r.json()
 
-        # Eğer veri liste değilse hata var demektir
         if not isinstance(data, list):
-            print("API hata verdi:", data)
+            print("API hata:", data)
             return []
 
         return data
 
     except Exception as e:
-        print("API bağlantı hatası:", e)
+        print("API hata:", e)
         return []
 
 def filter_coins(data):
@@ -43,7 +41,7 @@ def filter_coins(data):
         volume = float(c["quoteVolume"])
         change = float(c["priceChangePercent"])
 
-        if volume < 500000:  # düşük hacim ele
+        if volume < 500000:
             continue
 
         coins.append({
@@ -71,11 +69,11 @@ def main():
 
     data = get_market_data()
 
-if not data:
-    send_telegram("❌ Binance veri alınamadı")
-    return
+    if not data:
+        send_telegram("❌ Binance veri alınamadı")
+        return
 
-coins = filter_coins(data)
+    coins = filter_coins(data)
     signals = find_signals(coins)
 
     if signals:
