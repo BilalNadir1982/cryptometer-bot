@@ -1,16 +1,16 @@
-name: CryptoMeter Whale Bot
+name: Crypto Signal Bot
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/15 * * * *"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repo indir
+      - name: Repo çek
         uses: actions/checkout@v4
 
       - name: Python kur
@@ -18,12 +18,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Paketleri kur
+      - name: Paketleri yükle
         run: pip install -r requirements.txt
 
-      - name: Botu çalıştır
+      - name: Bot çalıştır
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CRYPTOMETER_API_KEY: ${{ secrets.CRYPTOMETER_API_KEY }}
-        run: python pump_bot.py
+        run: python bot.py
