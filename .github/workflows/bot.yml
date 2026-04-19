@@ -1,13 +1,20 @@
-name: Crypto Bot
+name: CryptoMeter Bot
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "*/15 * * * *"
 
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Repo çek
@@ -21,11 +28,5 @@ jobs:
       - name: Paketleri yükle
         run: pip install -r requirements.txt
 
-      - name: Dosyaları kontrol et
-        run: ls -R
-
-      - name: Bot çalıştır
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: Botu çalıştır
         run: python pump_bot.py
