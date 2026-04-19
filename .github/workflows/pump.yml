@@ -1,4 +1,4 @@
-name: Crypto Signal Bot
+name: Binance Spot + Alpha Scanner
 
 on:
   workflow_dispatch:
