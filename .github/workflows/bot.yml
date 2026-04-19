@@ -1,9 +1,9 @@
-name: CryptoMeter Bot
+name: Futures Signal Bot
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,10 +11,6 @@ permissions:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Repo çek
@@ -25,8 +21,39 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Paketleri yükle
-        run: pip install -r requirements.txt
+      - name: Paketleri kur
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Config dosyasını oluştur
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "telegram_bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
+            "telegram_chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}",
+            "scan_interval_minutes": 15,
+            "min_quote_volume_usdt": 10000000,
+            "min_price_change_percent_24h": 2.0,
+            "max_symbols": 60,
+            "cooldown_minutes": 60,
+            "score_threshold_strong": 8,
+            "score_threshold_medium": 6,
+            "tp_atr_multiplier": 2.2,
+            "sl_atr_multiplier": 1.2,
+            "summary_hour_istanbul": 23,
+            "include_symbols": [],
+            "exclude_symbols": ["BTCUSDT", "ETHUSDT"]
+          }
+          EOF
 
       - name: Botu çalıştır
-        run: python pump_bot.py
+        run: python bot.py
+
+      - name: State dosyalarını commit et
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state.json signals.json results.json || true
+          git diff --cached --quiet || git commit -m "bot state update"
+          git push
