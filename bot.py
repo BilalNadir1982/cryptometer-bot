@@ -406,7 +406,7 @@ def main():
     send_telegram("🤖 <b>Ücretsiz maksimum sistem taraması başladı</b>")
 
     candidates = get_candidate_coins()
-    tradable = get_binance_symbols()
+    tradable = [c["symbol"] for c in candidates]
 
     sent = 0
     checked = 0
@@ -414,8 +414,7 @@ def main():
     for coin in candidates:
         symbol = coin["symbol"]
 
-        if symbol not in tradable:
-            continue
+        
         if not cooldown_ok(state, symbol, 60):
             continue
 
