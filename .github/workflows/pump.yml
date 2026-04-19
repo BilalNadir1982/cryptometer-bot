@@ -1,4 +1,4 @@
-name: Binance Spot + Alpha Scanner
+name: Crypto Bot
 
 on:
   workflow_dispatch:
@@ -20,6 +20,9 @@ jobs:
 
       - name: Paketleri yükle
         run: pip install -r requirements.txt
+
+      - name: Dosyaları kontrol et
+        run: ls -R
 
       - name: Bot çalıştır
         env:
