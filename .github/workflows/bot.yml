@@ -48,7 +48,7 @@ jobs:
           EOF
 
       - name: Botu çalıştır
-        run: python bot.py
+  run: python cryptometer-bot/bot.py
 
       - name: State dosyalarını commit et
         run: |
