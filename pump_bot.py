@@ -15,20 +15,18 @@ ALPHA_BASE_URL = "https://www.binance.com"
 
 REQUEST_TIMEOUT = 20
 
-# Spot tarama ayarları
+# Daha agresif ayarlar
 SPOT_INTERVAL = "5m"
 SPOT_KLINE_LIMIT = 120
-SPOT_TOP_SYMBOLS_LIMIT = 40
-SPOT_MIN_QUOTE_VOLUME_USDT = 7_500_000
-SPOT_SIGNAL_THRESHOLD = 5
+SPOT_TOP_SYMBOLS_LIMIT = 60
+SPOT_MIN_QUOTE_VOLUME_USDT = 3_000_000
+SPOT_SIGNAL_THRESHOLD = 4
 
-# Alpha tarama ayarları
 ALPHA_INTERVAL = "5m"
 ALPHA_KLINE_LIMIT = 120
-ALPHA_SIGNAL_THRESHOLD = 5
-ALPHA_MAX_SYMBOLS = 50   # çok spam olmasın diye ilk 50
+ALPHA_SIGNAL_THRESHOLD = 4
+ALPHA_MAX_SYMBOLS = 80
 
-# Tekrar mesaj engeli (aynı çalıştırmada aynı coin tekrar düşmesin)
 MAX_SEND_PER_GROUP = 5
 
 
@@ -42,7 +40,7 @@ def log(msg: str):
 
 def send_telegram(text: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log("Telegram ayarları eksik. Mesaj konsola yazılıyor:")
+        log("Telegram ayarları eksik.")
         print(text)
         return
 
@@ -134,7 +132,7 @@ def rsi(closes, period=14):
 
 
 # =========================
-# SPOT BÖLÜMÜ
+# SPOT
 # =========================
 
 def get_spot_top_symbols():
@@ -160,7 +158,6 @@ def get_spot_top_symbols():
 
         if quote_volume < SPOT_MIN_QUOTE_VOLUME_USDT:
             continue
-
         if last_price <= 0:
             continue
 
@@ -238,28 +235,28 @@ def analyze_spot_symbol(symbol_data):
             bear_score += 1
             reasons.append("EMA20<EMA50")
 
-    if move_1 >= 0.8:
+    if move_1 >= 0.5:
         bull_score += 1
         reasons.append(f"1 mum %+{move_1:.2f}")
-    elif move_1 <= -0.8:
+    elif move_1 <= -0.5:
         bear_score += 1
         reasons.append(f"1 mum %{move_1:.2f}")
 
-    if move_5 >= 1.8:
+    if move_5 >= 1.2:
         bull_score += 2
         reasons.append(f"5 mum %+{move_5:.2f}")
-    elif move_5 <= -1.8:
+    elif move_5 <= -1.2:
         bear_score += 2
         reasons.append(f"5 mum %{move_5:.2f}")
 
-    if move_15 >= 2.8:
+    if move_15 >= 2.0:
         bull_score += 2
         reasons.append(f"15 mum %+{move_15:.2f}")
-    elif move_15 <= -2.8:
+    elif move_15 <= -2.0:
         bear_score += 2
         reasons.append(f"15 mum %{move_15:.2f}")
 
-    if volume_ratio >= 1.8:
+    if volume_ratio >= 1.4:
         if move_1 >= 0:
             bull_score += 2
             reasons.append(f"Alım hacmi x{volume_ratio:.2f}")
@@ -268,19 +265,19 @@ def analyze_spot_symbol(symbol_data):
             reasons.append(f"Satış hacmi x{volume_ratio:.2f}")
 
     if rsi_val is not None:
-        if 52 <= rsi_val <= 68:
+        if 48 <= rsi_val <= 70:
             bull_score += 1
             reasons.append(f"RSI uygun {rsi_val:.1f}")
-        elif rsi_val >= 72:
+        elif rsi_val >= 75:
             bear_score += 1
             reasons.append(f"RSI şişmiş {rsi_val:.1f}")
-        elif rsi_val <= 35:
+        elif rsi_val <= 32:
             reasons.append(f"RSI dipte {rsi_val:.1f}")
 
-    if symbol_data["price_change_percent_24h"] >= 3:
+    if symbol_data["price_change_percent_24h"] >= 2:
         bull_score += 1
         reasons.append(f"24s %+{symbol_data['price_change_percent_24h']:.2f}")
-    elif symbol_data["price_change_percent_24h"] <= -3:
+    elif symbol_data["price_change_percent_24h"] <= -2:
         bear_score += 1
         reasons.append(f"24s %{symbol_data['price_change_percent_24h']:.2f}")
 
@@ -338,7 +335,7 @@ def scan_spot_market():
                     spot_up.append(result)
                 else:
                     spot_down.append(result)
-            time.sleep(0.12)
+            time.sleep(0.10)
         except Exception as e:
             errors += 1
             log(f"Spot hata {s['symbol']}: {e}")
@@ -350,12 +347,8 @@ def scan_spot_market():
 
 
 # =========================
-# ALPHA BÖLÜMÜ
+# ALPHA
 # =========================
-
-def get_alpha_token_list():
-    return alpha_get_json("/bapi/defi/v1/public/wallet-direct/buw/wallet/cex/alpha/all/token/list")
-
 
 def get_alpha_exchange_info():
     return alpha_get_json("/bapi/defi/v1/public/alpha-trade/get-exchange-info")
@@ -376,9 +369,6 @@ def get_alpha_klines(symbol, interval="5m", limit=120):
 
 
 def get_alpha_usdt_symbols():
-    """
-    TRADING durumundaki Alpha USDT pariteleri.
-    """
     ex = get_alpha_exchange_info()
     symbols = ex.get("symbols", [])
     out = []
@@ -401,8 +391,6 @@ def parse_alpha_klines(klines):
     quote_volumes = []
 
     for k in klines:
-        # Beklenen format:
-        # [open_time, open, high, low, close, volume, close_time, quote_asset_volume, ...]
         closes.append(float(k[4]))
         quote_volumes.append(float(k[7]))
 
@@ -450,21 +438,28 @@ def analyze_alpha_symbol(symbol):
             bear_score += 2
             reasons.append("EMA20<EMA50")
 
-    if move_5 >= 2:
+    if move_1 >= 0.5:
+        bull_score += 1
+        reasons.append(f"1 mum %+{move_1:.2f}")
+    elif move_1 <= -0.5:
+        bear_score += 1
+        reasons.append(f"1 mum %{move_1:.2f}")
+
+    if move_5 >= 1.0:
         bull_score += 2
         reasons.append(f"5 mum %+{move_5:.2f}")
-    elif move_5 <= -2:
+    elif move_5 <= -1.0:
         bear_score += 2
         reasons.append(f"5 mum %{move_5:.2f}")
 
-    if move_15 >= 3:
+    if move_15 >= 1.8:
         bull_score += 2
         reasons.append(f"15 mum %+{move_15:.2f}")
-    elif move_15 <= -3:
+    elif move_15 <= -1.8:
         bear_score += 2
         reasons.append(f"15 mum %{move_15:.2f}")
 
-    if volume_ratio >= 1.8:
+    if volume_ratio >= 1.3:
         if move_1 >= 0:
             bull_score += 2
             reasons.append(f"Alım hacmi x{volume_ratio:.2f}")
@@ -473,13 +468,13 @@ def analyze_alpha_symbol(symbol):
             reasons.append(f"Satış hacmi x{volume_ratio:.2f}")
 
     if rsi_val is not None:
-        if 52 <= rsi_val <= 68:
+        if 45 <= rsi_val <= 72:
             bull_score += 1
             reasons.append(f"RSI uygun {rsi_val:.1f}")
-        elif rsi_val >= 72:
+        elif rsi_val >= 78:
             bear_score += 1
             reasons.append(f"RSI şişmiş {rsi_val:.1f}")
-        elif rsi_val <= 35:
+        elif rsi_val <= 30:
             reasons.append(f"RSI dipte {rsi_val:.1f}")
 
     try:
@@ -489,10 +484,10 @@ def analyze_alpha_symbol(symbol):
         price_change_24h = 0.0
         quote_volume_24h = 0.0
 
-    if price_change_24h >= 4:
+    if price_change_24h >= 2.5:
         bull_score += 1
         reasons.append(f"24s %+{price_change_24h:.2f}")
-    elif price_change_24h <= -4:
+    elif price_change_24h <= -2.5:
         bear_score += 1
         reasons.append(f"24s %{price_change_24h:.2f}")
 
@@ -542,7 +537,6 @@ def scan_alpha_market():
         log(f"Alpha sembolleri alınamadı: {e}")
         return [], [], 1
 
-    # çok kalabalık olursa ilk N tane tara
     alpha_symbols = alpha_symbols[:ALPHA_MAX_SYMBOLS]
     log(f"Alpha taranacak coin: {len(alpha_symbols)}")
 
@@ -554,7 +548,7 @@ def scan_alpha_market():
                     alpha_up.append(result)
                 else:
                     alpha_down.append(result)
-            time.sleep(0.15)
+            time.sleep(0.12)
         except Exception as e:
             errors += 1
             log(f"Alpha hata {symbol}: {e}")
@@ -613,10 +607,10 @@ def format_group(title, items):
 def main():
     log("Bot çalıştı. Spot + Alpha tarama başlıyor...")
 
-    # Spot tarama
-    spot_up, spot_down, spot_errors = scan_spot_market()
+    # Test mesajı
+    send_telegram("✅ Test mesajı: Bot çalıştı, tarama başlıyor.")
 
-    # Alpha tarama
+    spot_up, spot_down, spot_errors = scan_spot_market()
     alpha_up, alpha_down, alpha_errors = scan_alpha_market()
 
     total_errors = spot_errors + alpha_errors
@@ -633,13 +627,15 @@ def main():
     )
     send_telegram(summary)
 
-    # Grup özetleri
+    if total_found == 0:
+        send_telegram("ℹ️ Bot çalıştı ama bu turda uygun sinyal bulunamadı.")
+        return
+
     send_telegram(format_group("📈 SPOT YÜKSELİŞ ADAYLARI", spot_up))
     send_telegram(format_group("📉 SPOT DÜŞÜŞ RİSKİ", spot_down))
     send_telegram(format_group("🧪 ALPHA YÜKSELİŞ ADAYLARI", alpha_up))
     send_telegram(format_group("⚠️ ALPHA DÜŞÜŞ RİSKİ", alpha_down))
 
-    # Detay mesajları
     for item in spot_up + spot_down + alpha_up + alpha_down:
         send_telegram(format_signal(item))
 
