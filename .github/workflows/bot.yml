@@ -1,4 +1,4 @@
-name: Scalp Bot
+name: Scalp Bot Pro
 
 on:
   schedule:
@@ -12,12 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Python
+      - name: Python setup
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Install
+      - name: Install deps
         run: pip install -r requirements.txt
 
       - name: Run bot
