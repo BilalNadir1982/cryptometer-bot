@@ -6,7 +6,7 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 📩 SEND
+# 📩 TELEGRAM MESAJ
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -18,23 +18,32 @@ def send(msg):
     except:
         print("Telegram error")
 
-# 📊 BINANCE FUTURES
+# 📊 BINANCE FUTURES VERİ
 def get_coins():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-    r = requests.get(url, timeout=10)
-    data = r.json()
 
-    if not isinstance(data, list):
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+
+        if not isinstance(data, list):
+            print("API HATA:", data)
+            return []
+
+        return [c for c in data if c["symbol"].endswith("USDT")]
+
+    except Exception as e:
+        print("API error:", e)
         return []
-
-    return [c for c in data if c["symbol"].endswith("USDT")]
 
 # ⚡ SCALP ANALİZ
 def analyze():
     coins = get_coins()
     signals = []
 
-    # 🔥 en aktif 150 coin
+    if not coins:
+        return signals
+
     coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:150]
 
     for c in coins:
@@ -44,38 +53,31 @@ def analyze():
             vol = float(c["quoteVolume"])
             ch24 = float(c["priceChangePercent"])
 
-            # 🧠 SCALP momentum (fake 1h yerine)
             momentum = ch24 / 24
 
             score = 0
             reasons = []
 
-            # ⚡ hızlı hareket
             if abs(momentum) > 0.3:
                 score += 2
-                reasons.append("Hızlı momentum")
+                reasons.append("Momentum")
 
-            # 💣 hacim spike
             if vol > 30_000_000:
                 score += 2
-                reasons.append("Yüksek hacim")
+                reasons.append("Hacim yüksek")
 
-            # 🚀 mini pump
             if ch24 > 2:
                 score += 1
-                reasons.append("Mini pump")
+                reasons.append("Pump")
 
-            # 🔻 mini dump
             if ch24 < -2:
                 score += 1
-                reasons.append("Mini dump")
+                reasons.append("Dump")
 
-            # 🐋 whale proxy
             if vol > 80_000_000:
                 score += 2
                 reasons.append("Whale hareketi")
 
-            # 🎯 SCALP SINYAL
             if score >= 3:
                 direction = "🚀 LONG SCALP" if ch24 > 0 else "🔻 SHORT SCALP"
 
@@ -105,37 +107,14 @@ def main():
     signals = analyze()
 
     if not signals:
-        send("❌ SCALP SİNYAL YOK")
-    else:
-        for s in signals[:7]:
-            send(s)
-            time.sleep(1)
-
-    def main():
-    signals = analyze()
-
-    if not signals:
-        print("Sinyal yok")
-        return
+        return  # ❌ sessiz mod (spam yok)
 
     for s in signals[:5]:
         send(s)
         time.sleep(1)
 
-    send(f"📊 Sinyal sayısı: {len(signals)}")
+    send(f"📊 TARAMA BİTTİ | Sinyal: {len(signals)}")
 
-    # ❌ sinyal yoksa HİÇBİR ŞEY YAPMA
-    if not signals:
-        print("Sinyal yok, sessiz mod")
-        return
-
-    # 🚀 sinyal varsa gönder
-    for s in signals[:5]:
-        send(s)
-        time.sleep(1)
-
-    send(f"📊 SIGNAL ALERT | {len(signals)} fırsat bulundu")
-
-# ▶️ RUN
+# ▶️ ÇALIŞTIR
 if __name__ == "__main__":
     main()
