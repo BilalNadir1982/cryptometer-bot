@@ -76,10 +76,10 @@ def scalp_signal(ch1, vol):
 def ai_score(ch1, ch24, vol, fund, oi):
     score = 0
 
-    if abs(ch24) > 5:
-        score += 2
+    if abs(ch24) > 3:
+    score += 1
 
-    if vol > 50000000:
+    if vol > 30_000_000:
         score += 2
 
     if fund > 0.01:
@@ -142,7 +142,7 @@ def analyze():
             fund = fund_map.get(name, 0)
             oi = get_oi(name)
 
-            ch1 = 0  # Binance 1h yok → approx
+            ch1 = ch24 / 24  # Binance 1h yok → approx
 
             whale = detect_whale(vol)
             liq = liquidation_signal(ch24, ch1, whale)
@@ -161,7 +161,7 @@ def analyze():
             if scalp:
                 reasons.append(scalp)
 
-            if score >= 6:
+            if score >= 4:
                 direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
 
                 msg = f"""
