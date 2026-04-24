@@ -1,4 +1,4 @@
-name: Crypto Bot
+name: Pro Crypto Bot
 
 on:
   schedule:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
 
     steps:
@@ -18,10 +18,10 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Kütüphaneler
+      - name: Kütüphane kur
         run: pip install requests
 
-      - name: Botu çalıştır
+      - name: Bot çalıştır
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
