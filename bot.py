@@ -58,18 +58,18 @@ def analyze():
             score = 0
             reasons = []
 
-            if abs(momentum) > 0.3:
+            if abs(momentum) > 0.2:
                 score += 2
                 reasons.append("Momentum")
 
-            if vol > 30_000_000:
+            if vol > 15_000_000:
                 score += 2
                 reasons.append("Hacim yüksek")
 
             if ch24 > 2:
                 score += 1
                 reasons.append("Pump")
-
+               
             if ch24 < -2:
                 score += 1
                 reasons.append("Dump")
@@ -78,7 +78,7 @@ def analyze():
                 score += 2
                 reasons.append("Whale hareketi")
 
-            if score >= 3:
+            if score >= 2:
                 direction = "🚀 LONG SCALP" if ch24 > 0 else "🔻 SHORT SCALP"
 
                 msg = f"""
