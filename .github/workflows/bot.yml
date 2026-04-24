@@ -1,27 +1,26 @@
-name: Scalp Trading Bot
+name: Scalp Bot
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 5 dakikada bir
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repo çek
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Python kur
+      - name: Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
-      - name: Bağımlılıkları yükle
+      - name: Install
         run: pip install -r requirements.txt
 
-      - name: Bot çalıştır
+      - name: Run bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
