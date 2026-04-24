@@ -114,6 +114,16 @@ def main():
     def main():
     signals = analyze()
 
+    if not signals:
+        print("Sinyal yok")
+        return
+
+    for s in signals[:5]:
+        send(s)
+        time.sleep(1)
+
+    send(f"📊 Sinyal sayısı: {len(signals)}")
+
     # ❌ sinyal yoksa HİÇBİR ŞEY YAPMA
     if not signals:
         print("Sinyal yok, sessiz mod")
