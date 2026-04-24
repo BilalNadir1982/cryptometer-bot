@@ -1,1 +1,3 @@
-requests
+bot.py
+requirements.txt
+.github/workflows/bot.yml
