@@ -18,13 +18,24 @@ def send(msg):
 # 📊 BINANCE FUTURES DATA
 def get_coins():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-    r = requests.get(url)
-    data = r.json()
 
-    # sadece USDT pariteleri
-    coins = [c for c in data if c["symbol"].endswith("USDT")]
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
 
-    return coins
+        # 🚨 Eğer veri liste değilse hata var
+        if not isinstance(data, list):
+            print("API HATA:", data)
+            return []
+
+        # sadece USDT pariteleri
+        coins = [c for c in data if "symbol" in c and c["symbol"].endswith("USDT")]
+
+        return coins
+
+    except Exception as e:
+        print("HATA:", e)
+        return []
 
 # 🔥 TOP GAINERS / LOSERS
 def get_top_movers():
