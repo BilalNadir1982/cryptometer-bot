@@ -2,13 +2,12 @@ import os
 import requests
 import time
 
-# 🔐 TELEGRAM
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 DEBUG = True
 
-# 📩 SEND
+# 📩 TELEGRAM
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -20,21 +19,62 @@ def send(msg):
     except:
         print("Telegram error")
 
-# 📊 BINANCE
-def get_coins():
+# 🔵 BINANCE FUTURES
+def get_binance():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+
     try:
         r = requests.get(url, timeout=10)
         data = r.json()
 
-        if not isinstance(data, list):
+        if isinstance(data, dict):
             return []
 
-        return [c for c in data if c["symbol"].endswith("USDT")]
+        return data
     except:
         return []
 
-# 🧠 ANALYZE + DEBUG
+# 🟢 COINGECKO FALLBACK
+def get_coingecko():
+    url = "https://api.coingecko.com/api/v3/coins/markets"
+
+    params = {
+        "vs_currency": "usd",
+        "order": "volume_desc",
+        "per_page": 50,
+        "page": 1,
+        "price_change_percentage": "24h"
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        data = r.json()
+
+        coins = []
+        for c in data:
+            coins.append({
+                "symbol": c["symbol"].upper() + "USDT",
+                "lastPrice": c["current_price"],
+                "quoteVolume": c["total_volume"],
+                "priceChangePercent": c.get("price_change_percentage_24h", 0)
+            })
+
+        return coins
+    except:
+        return []
+
+# 🔥 UNIFIED DATA
+def get_coins():
+    data = get_binance()
+
+    if not data:
+        if DEBUG:
+            print("Binance yok → CoinGecko aktif")
+        data = get_coingecko()
+
+    return data
+
+# 🧠 ANALYZE
 def analyze():
     coins = get_coins()
 
@@ -42,7 +82,7 @@ def analyze():
     logs = []
 
     if not coins:
-        return signals, ["API boş"]
+        return signals, ["API FULL FAIL"]
 
     coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:50]
 
@@ -59,21 +99,22 @@ def analyze():
             # 📈 trend
             if ch24 > 0:
                 score += 1
-                reasons.append("Trend +")
             else:
-                logs.append(f"{name}: trend -")
+                logs.append(f"{name} trend -")
 
             # 📦 volume
             if vol > 30_000_000:
                 score += 2
             else:
-                logs.append(f"{name}: düşük hacim")
+                logs.append(f"{name} low volume")
 
             # 🚀 momentum
             if ch24 > 2:
                 score += 1
+                reasons.append("Pump")
             elif ch24 < -2:
                 score += 1
+                reasons.append("Dump")
 
             logs.append(f"{name} score={score}")
 
@@ -84,22 +125,22 @@ def analyze():
                 msg = f"""
 <b>{name} {direction}</b>
 
-💰 Fiyat: {price}
+💰 Price: {price}
 📊 Score: {score}
 
 📈 24h: {round(ch24,2)}%
 📦 Volume: {int(vol)}
 
-🧠 Sinyal oluştu
+🧠 {', '.join(reasons)}
 """
                 signals.append(msg)
 
-        except Exception as e:
-            logs.append(f"HATA {str(e)}")
+        except:
+            continue
 
     return signals, logs
 
-# 🧠 DEBUG SEND
+# 🧠 DEBUG
 def send_debug(logs):
     if not DEBUG:
         return
@@ -112,7 +153,7 @@ def send_debug(logs):
 
 # 🚀 MAIN
 def main():
-    send("📡 SCALP BOT BAŞLADI")
+    send("📡 SCALP BOT STARTED (DUAL API)")
 
     signals, logs = analyze()
 
@@ -126,7 +167,7 @@ def main():
         send(s)
         time.sleep(1)
 
-    send(f"📊 BİTTİ | Sinyal: {len(signals)}")
+    send(f"📊 DONE | Signals: {len(signals)}")
 
 if __name__ == "__main__":
     main()
