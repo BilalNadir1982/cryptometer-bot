@@ -6,6 +6,9 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+DEBUG = True
+
+# 📩 SEND
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -20,20 +23,28 @@ def send(msg):
 # 📊 BINANCE
 def get_coins():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-    r = requests.get(url, timeout=10)
-    data = r.json()
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
 
-    if not isinstance(data, list):
+        if not isinstance(data, list):
+            return []
+
+        return [c for c in data if c["symbol"].endswith("USDT")]
+    except:
         return []
 
-    return [c for c in data if c["symbol"].endswith("USDT")]
-
-# 🧠 TREND SCORE (TV MANTIK)
+# 🧠 ANALYZE + DEBUG
 def analyze():
     coins = get_coins()
-    signals = []
 
-    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
+    signals = []
+    logs = []
+
+    if not coins:
+        return signals, ["API boş"]
+
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:50]
 
     for c in coins:
         try:
@@ -42,49 +53,31 @@ def analyze():
             ch24 = float(c["priceChangePercent"])
             vol = float(c["quoteVolume"])
 
-            # =========================
-            # 🧠 TRADINGVIEW MANTIĞI
-            # =========================
-
             score = 0
             reasons = []
 
-            # EMA proxy (trend)
+            # 📈 trend
             if ch24 > 0:
                 score += 1
-                reasons.append("Pozitif trend")
+                reasons.append("Trend +")
+            else:
+                logs.append(f"{name}: trend -")
 
-            if ch24 > 3:
-                score += 1
-                reasons.append("Güçlü yükseliş")
-
-            if ch24 < -3:
-                score += 1
-                reasons.append("Güçlü düşüş")
-
-            # RSI proxy
-            if abs(ch24) < 1:
-                score -= 1
-                reasons.append("Zayıf momentum")
-
-            # MACD proxy
-            if ch24 > 1:
-                score += 1
-
-            # Volume spike
+            # 📦 volume
             if vol > 30_000_000:
                 score += 2
-                reasons.append("Volume spike")
+            else:
+                logs.append(f"{name}: düşük hacim")
 
-            # Whale
-            if vol > 80_000_000:
+            # 🚀 momentum
+            if ch24 > 2:
                 score += 1
-                reasons.append("Whale hareketi")
+            elif ch24 < -2:
+                score += 1
 
-            # =========================
+            logs.append(f"{name} score={score}")
+
             # 🎯 SIGNAL
-            # =========================
-
             if score >= 3:
                 direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
 
@@ -92,29 +85,42 @@ def analyze():
 <b>{name} {direction}</b>
 
 💰 Fiyat: {price}
-📊 Score: {score}/6
+📊 Score: {score}
 
 📈 24h: {round(ch24,2)}%
-📦 Hacim: {int(vol)}
+📦 Volume: {int(vol)}
 
-🧠 Neden:
-- {chr(10).join(reasons)}
+🧠 Sinyal oluştu
 """
                 signals.append(msg)
 
-        except:
-            continue
+        except Exception as e:
+            logs.append(f"HATA {str(e)}")
 
-    return signals
+    return signals, logs
+
+# 🧠 DEBUG SEND
+def send_debug(logs):
+    if not DEBUG:
+        return
+
+    msg = "🧠 DEBUG RAPORU\n\n"
+    for l in logs[:20]:
+        msg += f"- {l}\n"
+
+    send(msg)
 
 # 🚀 MAIN
 def main():
-    send("📡 TV STRATEJİ BOT BAŞLADI")
+    send("📡 SCALP BOT BAŞLADI")
 
-    signals = analyze()
+    signals, logs = analyze()
+
+    send_debug(logs)
 
     if not signals:
-        return  # sessiz mod
+        send("❌ Sinyal yok")
+        return
 
     for s in signals[:5]:
         send(s)
