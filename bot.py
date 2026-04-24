@@ -111,7 +111,20 @@ def main():
             send(s)
             time.sleep(1)
 
-    send(f"📊 SCALP TARAMA BİTTİ | Sinyal: {len(signals)}")
+    def main():
+    signals = analyze()
+
+    # ❌ sinyal yoksa HİÇBİR ŞEY YAPMA
+    if not signals:
+        print("Sinyal yok, sessiz mod")
+        return
+
+    # 🚀 sinyal varsa gönder
+    for s in signals[:5]:
+        send(s)
+        time.sleep(1)
+
+    send(f"📊 SIGNAL ALERT | {len(signals)} fırsat bulundu")
 
 # ▶️ RUN
 if __name__ == "__main__":
