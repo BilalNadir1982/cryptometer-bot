@@ -6,7 +6,6 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 📩 TELEGRAM MESAJ
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -18,68 +17,76 @@ def send(msg):
     except:
         print("Telegram error")
 
-# 📊 BINANCE FUTURES VERİ
+# 📊 BINANCE
 def get_coins():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-
-        if not isinstance(data, list):
-            print("API HATA:", data)
-            return []
-
-        return [c for c in data if c["symbol"].endswith("USDT")]
-
-    except Exception as e:
-        print("API error:", e)
+    if not isinstance(data, list):
         return []
 
-# ⚡ SCALP ANALİZ
+    return [c for c in data if c["symbol"].endswith("USDT")]
+
+# 🧠 TREND SCORE (TV MANTIK)
 def analyze():
     coins = get_coins()
     signals = []
 
-    if not coins:
-        return signals
-
-    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:150]
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
 
     for c in coins:
         try:
             name = c["symbol"]
             price = float(c["lastPrice"])
-            vol = float(c["quoteVolume"])
             ch24 = float(c["priceChangePercent"])
+            vol = float(c["quoteVolume"])
 
-            momentum = ch24 / 24
+            # =========================
+            # 🧠 TRADINGVIEW MANTIĞI
+            # =========================
 
             score = 0
             reasons = []
 
-            if abs(momentum) > 0.2:
-                score += 2
-                reasons.append("Momentum")
-
-            if vol > 15_000_000:
-                score += 2
-                reasons.append("Hacim yüksek")
-
-            if ch24 > 2:
+            # EMA proxy (trend)
+            if ch24 > 0:
                 score += 1
-                reasons.append("Pump")
-               
-            if ch24 < -2:
-                score += 1
-                reasons.append("Dump")
+                reasons.append("Pozitif trend")
 
+            if ch24 > 3:
+                score += 1
+                reasons.append("Güçlü yükseliş")
+
+            if ch24 < -3:
+                score += 1
+                reasons.append("Güçlü düşüş")
+
+            # RSI proxy
+            if abs(ch24) < 1:
+                score -= 1
+                reasons.append("Zayıf momentum")
+
+            # MACD proxy
+            if ch24 > 1:
+                score += 1
+
+            # Volume spike
+            if vol > 30_000_000:
+                score += 2
+                reasons.append("Volume spike")
+
+            # Whale
             if vol > 80_000_000:
-                score += 2
+                score += 1
                 reasons.append("Whale hareketi")
 
-            if score >= 2:
-                direction = "🚀 LONG SCALP" if ch24 > 0 else "🔻 SHORT SCALP"
+            # =========================
+            # 🎯 SIGNAL
+            # =========================
+
+            if score >= 3:
+                direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
 
                 msg = f"""
 <b>{name} {direction}</b>
@@ -102,19 +109,18 @@ def analyze():
 
 # 🚀 MAIN
 def main():
-    send("⚡ SCALP BOT BAŞLADI")
+    send("📡 TV STRATEJİ BOT BAŞLADI")
 
     signals = analyze()
 
     if not signals:
-        return  # ❌ sessiz mod (spam yok)
+        return  # sessiz mod
 
     for s in signals[:5]:
         send(s)
         time.sleep(1)
 
-    send(f"📊 TARAMA BİTTİ | Sinyal: {len(signals)}")
+    send(f"📊 BİTTİ | Sinyal: {len(signals)}")
 
-# ▶️ ÇALIŞTIR
 if __name__ == "__main__":
     main()
