@@ -2,14 +2,11 @@ import os
 import requests
 import time
 
+# 🔐 TELEGRAM
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-API_KEY = os.getenv("COINGECKO_API_KEY")
 
-headers = {
-    "x-cg-demo-api-key": API_KEY
-}
-
+# 📩 TELEGRAM GÖNDER
 def send(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     requests.post(url, json={
@@ -18,72 +15,102 @@ def send(msg):
         "parse_mode": "HTML"
     })
 
+# 📊 BINANCE FUTURES DATA
 def get_coins():
-    url = "https://api.coingecko.com/api/v3/coins/markets"
-    params = {
-        "vs_currency": "usd",
-        "order": "volume_desc",
-        "per_page": 50,
-        "page": 1,
-        "price_change_percentage": "1h,24h"
-    }
+    url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    r = requests.get(url)
+    data = r.json()
 
-    r = requests.get(url, params=params, headers=headers)
-    return r.json()
+    # sadece USDT pariteleri
+    coins = [c for c in data if c["symbol"].endswith("USDT")]
 
-def analyze():
+    return coins
+
+# 🔥 TOP GAINERS / LOSERS
+def get_top_movers():
     coins = get_coins()
 
+    for c in coins:
+        c["change"] = float(c["priceChangePercent"])
+
+    gainers = sorted(coins, key=lambda x: x["change"], reverse=True)[:5]
+    losers = sorted(coins, key=lambda x: x["change"])[:5]
+
+    return gainers, losers
+
+# 🧾 FORMAT
+def format_movers(gainers, losers):
+    msg = "🔥 <b>TOP GAINERS</b>\n\n"
+
+    for g in gainers:
+        msg += f"{g['symbol']} → {round(float(g['change']),2)}%\n"
+
+    msg += "\n🔻 <b>TOP LOSERS</b>\n\n"
+
+    for l in losers:
+        msg += f"{l['symbol']} → {round(float(l['change']),2)}%\n"
+
+    return msg
+
+# 🧠 SİNYAL ANALİZ
+def analyze():
+    coins = get_coins()
     signals = []
 
+    # 🔥 sadece güçlü coinler
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
+
     for c in coins:
-        name = c["symbol"].upper()
-        price = c["current_price"]
-        vol = c["total_volume"]
-        ch1 = c.get("price_change_percentage_1h_in_currency", 0)
-        ch24 = c.get("price_change_percentage_24h", 0)
+        name = c["symbol"]
+        price = float(c["lastPrice"])
+        vol = float(c["quoteVolume"])
+        ch24 = float(c["priceChangePercent"])
+        trades = int(c["count"])
+
+        # küçük coin filtre
+        if price < 0.0001:
+            continue
 
         score = 0
         reasons = []
 
         # HACİM
-        if vol > 10_000_000:
-            score += 1
+        if vol > 50_000_000:
+            score += 2
             reasons.append("Yüksek hacim")
 
-        # 1H PUMP
-        if ch1 > 2:
+        # YÜKSELİŞ
+        if ch24 > 5:
             score += 2
-            reasons.append("1h pump")
+            reasons.append("Güçlü yükseliş")
 
-        # 1H DUMP
-        if ch1 < -2:
+        # DÜŞÜŞ
+        if ch24 < -5:
             score += 2
-            reasons.append("1h dump")
+            reasons.append("Güçlü düşüş")
 
-        # 24H GÜÇ
-        if abs(ch24) > 5:
+        # TRADE YOĞUNLUĞU
+        if trades > 100000:
             score += 1
-            reasons.append("24h güçlü hareket")
+            reasons.append("Yoğun işlem")
 
-        # PSEUDO WHALE
-        if vol > 50_000_000 and abs(ch1) > 2:
+        # WHALE
+        if vol > 100_000_000 and abs(ch24) > 5:
             score += 3
             reasons.append("WHALE hareketi")
 
         if score >= 4:
-            direction = "🚀 LONG" if ch1 > 0 else "🔻 SHORT"
-
+            direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
             nedenler = "\n- ".join(reasons)
 
-msg = f"""
+            msg = f"""
 <b>{name} {direction}</b>
 
 Fiyat: {price}
 Skor: {score}/10
 
-1h: {round(ch1,2)}%
 24h: {round(ch24,2)}%
+Hacim: {int(vol)}
 
 Neden:
 - {nedenler}
@@ -92,9 +119,15 @@ Neden:
 
     return signals
 
+# 🚀 MAIN
 def main():
     send("🤖 Bot çalıştı - Tarama başlıyor...")
 
+    # 🔥 GAINERS / LOSERS
+    gainers, losers = get_top_movers()
+    send(format_movers(gainers, losers))
+
+    # 🧠 SİNYAL
     signals = analyze()
 
     if not signals:
@@ -106,5 +139,6 @@ def main():
 
     send(f"📊 Tarama bitti | Sinyal: {len(signals)}")
 
+# ▶️ ÇALIŞTIR
 if __name__ == "__main__":
     main()
