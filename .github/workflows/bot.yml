@@ -1,8 +1,8 @@
-name: Free Signal Bot
+name: Crypto Bot
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/5 * * * *"  # 5 dakikada bir
   workflow_dispatch:
 
 jobs:
@@ -10,20 +10,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Repo çek
-        uses: actions/checkout@v4
+      - name: Kodu çek
+        uses: actions/checkout@v3
 
       - name: Python kur
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.10'
 
-      - name: Paketleri kur
-        run: pip install -r requirements.txt
+      - name: Kütüphaneler
+        run: pip install requests
 
       - name: Botu çalıştır
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
         run: python bot.py
