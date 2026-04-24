@@ -25,111 +25,17 @@ def get_coins():
     data = r.json()
 
     if not isinstance(data, list):
-        print("API ERROR:", data)
         return []
 
-    return [c for c in data if "symbol" in c and c["symbol"].endswith("USDT")]
+    return [c for c in data if c["symbol"].endswith("USDT")]
 
-# 💰 FUNDING
-def get_funding():
-    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
-    r = requests.get(url, timeout=10)
-    data = r.json()
-
-    if not isinstance(data, list):
-        return []
-
-    return data
-
-# 📦 OPEN INTEREST
-def get_oi(symbol):
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
-        r = requests.get(url, timeout=10)
-        return float(r.json()["openInterest"])
-    except:
-        return 0
-
-# 🐋 WHALE DETECTION
-def detect_whale(vol, avg=50000000):
-    return vol > avg * 2.5
-
-# 💣 LIQUIDATION (proxy)
-def liquidation_signal(ch24, ch1, whale):
-    if whale and abs(ch24) > 5:
-        return "⚠️ OLASI LIQUIDATION"
-    if ch24 > 8:
-        return "SHORT LIQUIDATION RİSKİ"
-    if ch24 < -8:
-        return "LONG LIQUIDATION RİSKİ"
-    return None
-
-# ⚡ SCALP
-def scalp_signal(ch1, vol):
-    if ch1 > 0.8 and vol > 20000000:
-        return "🚀 LONG SCALP"
-    if ch1 < -0.8 and vol > 20000000:
-        return "🔻 SHORT SCALP"
-    return None
-
-# 🤖 AI SCORE
-def ai_score(ch1, ch24, vol, fund, oi):
-    score = 0
-
-    if abs(ch24) > 3:
-    score += 1
-
-    if vol > 30_000_000:
-        score += 2
-
-    if fund > 0.01:
-        score += 2
-    elif fund < -0.01:
-        score += 2
-
-    if oi > 100000:
-        score += 2
-
-    if abs(ch1) > 1:
-        score += 2
-
-    return score
-
-# 🔥 TOP MOVERS
-def get_top_movers(coins):
-    for c in coins:
-        c["change"] = float(c["priceChangePercent"])
-
-    gainers = sorted(coins, key=lambda x: x["change"], reverse=True)[:5]
-    losers = sorted(coins, key=lambda x: x["change"])[:5]
-
-    return gainers, losers
-
-def format_movers(gainers, losers):
-    msg = "🔥 <b>TOP GAINERS</b>\n\n"
-
-    for g in gainers:
-        msg += f"{g['symbol']} → {round(g['change'],2)}%\n"
-
-    msg += "\n🔻 <b>TOP LOSERS</b>\n\n"
-
-    for l in losers:
-        msg += f"{l['symbol']} → {round(l['change'],2)}%\n"
-
-    return msg
-
-# 🧠 ANALYZE
+# ⚡ SCALP ANALİZ
 def analyze():
     coins = get_coins()
     signals = []
 
-    funding = get_funding()
-    fund_map = {x["symbol"]: float(x["lastFundingRate"]) for x in funding}
-
-    if not coins:
-        return signals
-
-    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
+    # 🔥 en aktif 150 coin
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:150]
 
     for c in coins:
         try:
@@ -137,45 +43,52 @@ def analyze():
             price = float(c["lastPrice"])
             vol = float(c["quoteVolume"])
             ch24 = float(c["priceChangePercent"])
-            trades = int(c["count"])
 
-            fund = fund_map.get(name, 0)
-            oi = get_oi(name)
+            # 🧠 SCALP momentum (fake 1h yerine)
+            momentum = ch24 / 24
 
-            ch1 = ch24 / 24  # Binance 1h yok → approx
-
-            whale = detect_whale(vol)
-            liq = liquidation_signal(ch24, ch1, whale)
-            scalp = scalp_signal(ch1, vol)
-
-            score = ai_score(ch1, ch24, vol, fund, oi)
-
+            score = 0
             reasons = []
 
-            if whale:
-                reasons.append("🐋 Whale hareketi")
+            # ⚡ hızlı hareket
+            if abs(momentum) > 0.3:
+                score += 2
+                reasons.append("Hızlı momentum")
 
-            if liq:
-                reasons.append(liq)
+            # 💣 hacim spike
+            if vol > 30_000_000:
+                score += 2
+                reasons.append("Yüksek hacim")
 
-            if scalp:
-                reasons.append(scalp)
+            # 🚀 mini pump
+            if ch24 > 2:
+                score += 1
+                reasons.append("Mini pump")
 
-            if score >= 4:
-                direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
+            # 🔻 mini dump
+            if ch24 < -2:
+                score += 1
+                reasons.append("Mini dump")
+
+            # 🐋 whale proxy
+            if vol > 80_000_000:
+                score += 2
+                reasons.append("Whale hareketi")
+
+            # 🎯 SCALP SINYAL
+            if score >= 3:
+                direction = "🚀 LONG SCALP" if ch24 > 0 else "🔻 SHORT SCALP"
 
                 msg = f"""
 <b>{name} {direction}</b>
 
 💰 Fiyat: {price}
-📊 Score: {score}/10
+📊 Score: {score}/6
 
 📈 24h: {round(ch24,2)}%
-💸 Funding: {fund}
-📦 OI: {oi}
-🔄 Trades: {trades}
+📦 Hacim: {int(vol)}
 
-🧠 Sinyaller:
+🧠 Neden:
 - {chr(10).join(reasons)}
 """
                 signals.append(msg)
@@ -187,24 +100,19 @@ def analyze():
 
 # 🚀 MAIN
 def main():
-    send("🤖 PRO BOT ÇALIŞTI - TARAMA BAŞLADI")
-
-    coins = get_coins()
-    gainers, losers = get_top_movers(coins)
-
-    if gainers and losers:
-        send(format_movers(gainers, losers))
+    send("⚡ SCALP BOT BAŞLADI")
 
     signals = analyze()
 
     if not signals:
-        send("❌ Sinyal yok")
+        send("❌ SCALP SİNYAL YOK")
     else:
-        for s in signals[:5]:
+        for s in signals[:7]:
             send(s)
             time.sleep(1)
 
-    send(f"📊 TARAMA BİTTİ | Sinyal: {len(signals)}")
+    send(f"📊 SCALP TARAMA BİTTİ | Sinyal: {len(signals)}")
 
+# ▶️ RUN
 if __name__ == "__main__":
     main()
