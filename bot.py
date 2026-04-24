@@ -78,7 +78,7 @@ def analyze():
         return signals
 
     # en yüksek hacimli 100 coin
-    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:200]
 
     for c in coins:
         try:
@@ -94,7 +94,7 @@ def analyze():
             score = 0
             reasons = []
 
-            if vol > 50_000_000:
+            if vol > 20_000_000:
                 score += 2
                 reasons.append("Yüksek hacim")
 
@@ -114,7 +114,7 @@ def analyze():
                 score += 3
                 reasons.append("WHALE hareketi")
 
-            if score >= 4:
+            if score >= 3:
                 direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
                 nedenler = "\n- ".join(reasons)
 
