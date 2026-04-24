@@ -6,7 +6,7 @@ import time
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# 📩 TELEGRAM GÖNDER
+# 📩 SEND
 def send(msg):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -16,37 +16,87 @@ def send(msg):
             "parse_mode": "HTML"
         }, timeout=10)
     except:
-        print("Telegram gönderim hatası")
+        print("Telegram error")
 
-# 📊 BINANCE FUTURES DATA
+# 📊 BINANCE FUTURES
 def get_coins():
     url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
-    try:
-        r = requests.get(url, timeout=10)
-        data = r.json()
-
-        # API hata kontrolü
-        if not isinstance(data, list):
-            print("API HATA:", data)
-            return []
-
-        # sadece USDT pariteleri
-        coins = [c for c in data if "symbol" in c and c["symbol"].endswith("USDT")]
-
-        return coins
-
-    except Exception as e:
-        print("Veri çekme hatası:", e)
+    if not isinstance(data, list):
+        print("API ERROR:", data)
         return []
 
-# 🔥 TOP GAINERS / LOSERS
-def get_top_movers():
-    coins = get_coins()
+    return [c for c in data if "symbol" in c and c["symbol"].endswith("USDT")]
 
-    if not coins:
-        return [], []
+# 💰 FUNDING
+def get_funding():
+    url = "https://fapi.binance.com/fapi/v1/premiumIndex"
+    r = requests.get(url, timeout=10)
+    data = r.json()
 
+    if not isinstance(data, list):
+        return []
+
+    return data
+
+# 📦 OPEN INTEREST
+def get_oi(symbol):
+    try:
+        url = f"https://fapi.binance.com/fapi/v1/openInterest?symbol={symbol}"
+        r = requests.get(url, timeout=10)
+        return float(r.json()["openInterest"])
+    except:
+        return 0
+
+# 🐋 WHALE DETECTION
+def detect_whale(vol, avg=50000000):
+    return vol > avg * 2.5
+
+# 💣 LIQUIDATION (proxy)
+def liquidation_signal(ch24, ch1, whale):
+    if whale and abs(ch24) > 5:
+        return "⚠️ OLASI LIQUIDATION"
+    if ch24 > 8:
+        return "SHORT LIQUIDATION RİSKİ"
+    if ch24 < -8:
+        return "LONG LIQUIDATION RİSKİ"
+    return None
+
+# ⚡ SCALP
+def scalp_signal(ch1, vol):
+    if ch1 > 0.8 and vol > 20000000:
+        return "🚀 LONG SCALP"
+    if ch1 < -0.8 and vol > 20000000:
+        return "🔻 SHORT SCALP"
+    return None
+
+# 🤖 AI SCORE
+def ai_score(ch1, ch24, vol, fund, oi):
+    score = 0
+
+    if abs(ch24) > 5:
+        score += 2
+
+    if vol > 50000000:
+        score += 2
+
+    if fund > 0.01:
+        score += 2
+    elif fund < -0.01:
+        score += 2
+
+    if oi > 100000:
+        score += 2
+
+    if abs(ch1) > 1:
+        score += 2
+
+    return score
+
+# 🔥 TOP MOVERS
+def get_top_movers(coins):
     for c in coins:
         c["change"] = float(c["priceChangePercent"])
 
@@ -55,30 +105,31 @@ def get_top_movers():
 
     return gainers, losers
 
-# 🧾 FORMAT
 def format_movers(gainers, losers):
     msg = "🔥 <b>TOP GAINERS</b>\n\n"
 
     for g in gainers:
-        msg += f"{g['symbol']} → {round(float(g['change']),2)}%\n"
+        msg += f"{g['symbol']} → {round(g['change'],2)}%\n"
 
     msg += "\n🔻 <b>TOP LOSERS</b>\n\n"
 
     for l in losers:
-        msg += f"{l['symbol']} → {round(float(l['change']),2)}%\n"
+        msg += f"{l['symbol']} → {round(l['change'],2)}%\n"
 
     return msg
 
-# 🧠 SİNYAL ANALİZ
+# 🧠 ANALYZE
 def analyze():
     coins = get_coins()
     signals = []
 
+    funding = get_funding()
+    fund_map = {x["symbol"]: float(x["lastFundingRate"]) for x in funding}
+
     if not coins:
         return signals
 
-    # en yüksek hacimli 100 coin
-    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:200]
+    coins = sorted(coins, key=lambda x: float(x["quoteVolume"]), reverse=True)[:100]
 
     for c in coins:
         try:
@@ -88,47 +139,44 @@ def analyze():
             ch24 = float(c["priceChangePercent"])
             trades = int(c["count"])
 
-            if price < 0.0001:
-                continue
+            fund = fund_map.get(name, 0)
+            oi = get_oi(name)
 
-            score = 0
+            ch1 = 0  # Binance 1h yok → approx
+
+            whale = detect_whale(vol)
+            liq = liquidation_signal(ch24, ch1, whale)
+            scalp = scalp_signal(ch1, vol)
+
+            score = ai_score(ch1, ch24, vol, fund, oi)
+
             reasons = []
 
-            if vol > 20_000_000:
-                score += 2
-                reasons.append("Yüksek hacim")
+            if whale:
+                reasons.append("🐋 Whale hareketi")
 
-            if ch24 > 5:
-                score += 2
-                reasons.append("Güçlü yükseliş")
+            if liq:
+                reasons.append(liq)
 
-            if ch24 < -5:
-                score += 2
-                reasons.append("Güçlü düşüş")
+            if scalp:
+                reasons.append(scalp)
 
-            if trades > 100000:
-                score += 1
-                reasons.append("Yoğun işlem")
-
-            if vol > 100_000_000 and abs(ch24) > 5:
-                score += 3
-                reasons.append("WHALE hareketi")
-
-            if score >= 3:
+            if score >= 6:
                 direction = "🚀 LONG" if ch24 > 0 else "🔻 SHORT"
-                nedenler = "\n- ".join(reasons)
 
                 msg = f"""
 <b>{name} {direction}</b>
 
-Fiyat: {price}
-Skor: {score}/10
+💰 Fiyat: {price}
+📊 Score: {score}/10
 
-24h: {round(ch24,2)}%
-Hacim: {int(vol)}
+📈 24h: {round(ch24,2)}%
+💸 Funding: {fund}
+📦 OI: {oi}
+🔄 Trades: {trades}
 
-Neden:
-- {nedenler}
+🧠 Sinyaller:
+- {chr(10).join(reasons)}
 """
                 signals.append(msg)
 
@@ -139,17 +187,14 @@ Neden:
 
 # 🚀 MAIN
 def main():
-    send("🤖 Bot çalıştı - Tarama başlıyor...")
+    send("🤖 PRO BOT ÇALIŞTI - TARAMA BAŞLADI")
 
-    # movers
-    gainers, losers = get_top_movers()
+    coins = get_coins()
+    gainers, losers = get_top_movers(coins)
 
     if gainers and losers:
         send(format_movers(gainers, losers))
-    else:
-        send("⚠️ Veri alınamadı (API limit olabilir)")
 
-    # sinyaller
     signals = analyze()
 
     if not signals:
@@ -159,8 +204,7 @@ def main():
             send(s)
             time.sleep(1)
 
-    send(f"📊 Tarama bitti | Sinyal: {len(signals)}")
+    send(f"📊 TARAMA BİTTİ | Sinyal: {len(signals)}")
 
-# ▶️ ÇALIŞTIR
 if __name__ == "__main__":
     main()
